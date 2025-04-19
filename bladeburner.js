@@ -59,8 +59,8 @@ export async function main(ns) {
     ownedSourceFiles = await getActiveSourceFiles(ns);
     //if (!(6 in ownedSourceFiles) && resetInfo.currentNode != 7) // NOTE: Despite the SF6 description, it seems you don't need SF6
     //    return log(ns, "ERROR: You have not yet unlocked bladeburner outside of BNs 6 & 7 (need SF6)", true, 'error');
-    if (!(7 in ownedSourceFiles))
-        return log(ns, "ERROR: You have not yet unlocked the bladeburner API (need SF7 or to be in BN7)", true, 'error');
+    if (!(7 in ownedSourceFiles) && !(6 in ownedSourceFiles))
+        return log(ns, "ERROR: You have not yet unlocked the bladeburner API (need SF6 or SF7)", true, 'error');
     if (resetInfo.currentNode == 8)
         return log(ns, "ERROR: Bladeburner is completely disabled in Bitnode 8 :`(\nHappy stonking", true, 'error');
     // Ensure we've joined bladeburners before proceeding further
@@ -315,35 +315,49 @@ async function mainLoop(ns) {
         // NOTE: We don't use the "Hyperbolic Regeneration Chamber". We are cautious enough that we should never need healing.
     }
 
-    // Detect our current action (API returns an object like { "type":"Operation", "name":"Investigation" })
+    // Detect our current action (API returns an object like { "type":"Operation", "name":"Investigation" } or null)
     const currentAction = await getBBInfo(ns, `getCurrentAction()`);
     // Special case: If the user has manually kicked off the last BlackOps, don't interrupt it, let it be our last task
-    if (currentAction?.name == remainingBlackOpsNames[remainingBlackOpsNames - 1]) lastAssignedTask = currentAction;
+    if (currentAction?.name == remainingBlackOpsNames[remainingBlackOpsNames.length - 1]) lastAssignedTask = currentAction.name;
     // Warn the user if it looks like a task was interrupted by something else (user activity or bladeburner automation). Ignore if our last assigned task has run out of actions.
-    if (lastAssignedTask && lastAssignedTask != currentAction?.name && getCount(lastAssignedTask) > 0) {
-        log(ns, `WARNING: The last task this script assigned was "${lastAssignedTask}", but you're now doing "${currentAction?.name || '(nothing)'}". ` +
+    if (lastAssignedTask && !currentAction && getCount(lastAssignedTask) > 0) {
+        log(ns, `WARNING: The last task this script assigned was "${lastAssignedTask}", but you're now doing nothing. ` +
+            `Have you been using Bladeburner Automation? If so, try typing "automate dis" in the Bladeburner Console.`, false, 'warning');
+    } else if (lastAssignedTask && currentAction?.name !== lastAssignedTask && getCount(lastAssignedTask) > 0) {
+        log(ns, `WARNING: The last task this script assigned was "${lastAssignedTask}", but you're now doing "${currentAction.name}". ` +
             `Have you been using Bladeburner Automation? If so, try typing "automate dis" in the Bladeburner Console.`, false, 'warning');
     } else if (currentAction?.name) {
-        const currentDuration = await getBBInfo(ns, `getActionTime(ns.args[0], ns.args[1])`, currentAction.type, currentAction.name);
-        if (!lastAssignedTask) { // Leave a log acknowledging if we just started up and there was an activity already underway.
-            log(ns, `INFO: At startup, Bladeburner was already doing "${currentAction?.name}", ` +
-                (bestActionName != currentAction.name ? `but we would prefer to do "${bestActionName}", so we will be switching.` :
-                    `which is what we were planning to do, so we will leave the current task alone.`));
-            lastAssignedTask = bestActionName;
+        // Skip API call if type is "Idle" with empty name to avoid errors from API break in v2.6.1
+        if (currentAction.type === "Idle" && currentAction.name === "") {
+            log(ns, `INFO: Detected idle action, skipping getActionTime API call due to API limitations`);
+        } else {
+            const currentDuration = await getBBInfo(ns, `getActionTime(ns.args[0], ns.args[1])`, currentAction.type, currentAction.name);
+            if (!lastAssignedTask) { // Leave a log acknowledging if we just started up and there was an activity already underway.
+                log(ns, `INFO: At startup, Bladeburner was already doing "${currentAction?.name}", ` +
+                    (bestActionName != currentAction.name ? `but we would prefer to do "${bestActionName}", so we will be switching.` :
+                        `which is what we were planning to do, so we will leave the current task alone.`));
+                lastAssignedTask = bestActionName;
+            }
+            // Normally, we don't switch tasks if our previously assigned task hasn't had time to complete once.
+            // EXCEPTION: Early after a reset, this time is LONG, and in a few seconds it may be faster to just stop and restart it.
+            if (currentDuration < currentTaskEndTime - Date.now()) {
+                log(ns, `INFO: ${bestActionName == currentAction.name ? 'Restarting' : 'Cancelling'} action "${currentAction.name}" because its new duration ` +
+                    `is less than the time remaining (${formatDuration(currentDuration)} < ${formatDuration(currentTaskEndTime - Date.now())})`);
+            } else if (Date.now() < currentTaskEndTime || bestActionName == currentAction.name) {
+                return;
+            }
         }
-        // Normally, we don't switch tasks if our previously assigned task hasn't had time to complete once.
-        // EXCEPTION: Early after a reset, this time is LONG, and in a few seconds it may be faster to just stop and restart it.
-        if (currentDuration < currentTaskEndTime - Date.now()) {
-            log(ns, `INFO: ${bestActionName == currentAction.name ? 'Restarting' : 'Cancelling'} action "${currentAction.name}" because its new duration ` +
-                `is less than the time remaining (${formatDuration(currentDuration)} < ${formatDuration(currentTaskEndTime - Date.now())})`);
-        } else if (Date.now() < currentTaskEndTime || bestActionName == currentAction.name) return;
     } // Otherwise prior action was stopped or ended and no count remain, so we should start a new one regardless of expected currentTaskEndTime
 
     // Change actions if we're not currently doing the desired action
     const bestActionType = nextBlackOp == bestActionName ? "Black Op" : contractNames.includes(bestActionName) ? "Contract" :
         operationNames.includes(bestActionName) ? "Operation" : "General Action";
     const success = await getBBInfo(ns, `startAction(ns.args[0], ns.args[1])`, bestActionType, bestActionName);
-    const expectedDuration = await getBBInfo(ns, `getActionTime(ns.args[0], ns.args[1])`, bestActionType, bestActionName);
+    // Skip getActionTime API call for "Idle" type with empty name (v2.6.1 API break)
+    let expectedDuration = 0;
+    if (!(bestActionType === "Idle" && bestActionName === "")) {
+        expectedDuration = await getBBInfo(ns, `getActionTime(ns.args[0], ns.args[1])`, bestActionType, bestActionName);
+    }
     log(ns, (success ? `INFO: Switched to Bladeburner ${bestActionType} "${bestActionName}" (${reason}). ETA: ${formatDuration(expectedDuration)}` :
         `ERROR: Failed to switch to Bladeburner ${bestActionType} "${bestActionName}" (Count: ${getCount(bestActionName)}, ` +
         `ETA: ${formatDuration(expectedDuration)}, Details: ${reason})`),

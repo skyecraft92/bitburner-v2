@@ -1,0 +1,9 @@
+// Bitburner Bootstrap Script
+// 
+// To download all your scripts from GitHub to Bitburner, copy and paste the following 
+// command into the Bitburner terminal:
+
+wget https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/bitburner-sync.js sync.js
+
+// Then run the sync script:
+// run sync.js 

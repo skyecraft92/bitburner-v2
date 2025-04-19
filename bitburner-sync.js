@@ -85,16 +85,8 @@ export async function main(ns) {
     "Remote/share.js"
   ];
   
-  // Create Remote directory if it doesn't exist
-  if (!ns.fileExists("Remote/")) {
-    try {
-      // In Bitburner, we can create a directory by writing a file to it
-      ns.write("Remote/.placeholder", "", "w");
-      ns.tprint("Created Remote directory");
-    } catch (e) {
-      ns.tprint(`ERROR: Could not create Remote directory: ${e}`);
-    }
-  }
+  // In Bitburner, directories are automatically created when downloading files
+  // No need to manually create the Remote directory
   
   // Download Remote folder files
   for (const file of remoteFiles) {
@@ -121,6 +113,10 @@ export async function main(ns) {
   ns.tprint(`Successfully downloaded: ${successCount} files`);
   ns.tprint(`Failed to download: ${failCount} files`);
   ns.tprint(`Some files may fail to download if they don't exist in the repository.`);
+  
+  // Add a reminder to run one of the main scripts if desired
+  ns.tprint(`\nYou can now run one of the main scripts, like daemon.js or autopilot.js`);
+  ns.tprint(`Example: run daemon.js`);
 }
 
 // Autocomplete handler

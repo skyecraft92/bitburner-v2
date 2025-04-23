@@ -10,14 +10,16 @@ export async function main(ns) {
     "bladeburner.js"
   ];
   
-  // GitHub raw content URL prefix (update this if needed)
-  const githubPrefix = "https://raw.githubusercontent.com/yourusername/bitburnerFiles/main/";
+  // GitHub raw content URL prefix - updated to the correct repository
+  const githubPrefix = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/";
   
   // Download each script
   let successCount = 0;
   
   ns.tprint("╔════════════════════════════════════════╗");
   ns.tprint("║       DOWNLOADING SCRIPT PACKAGE       ║");
+  ns.tprint("╠════════════════════════════════════════╣");
+  ns.tprint(`║ Source: ${githubPrefix} ║`);
   ns.tprint("╠════════════════════════════════════════╣");
   
   for (const script of scripts) {

@@ -1,8 +1,8 @@
 /** @param {NS} ns */
 export async function main(ns) {
   // The URL to your GitHub repository (raw files)
-  // Change this to your actual GitHub URL
-  const githubUrl = "https://raw.githubusercontent.com/skyec/bitburnerFiles-1/main/";
+  // This is the correct URL for your repository
+  const githubUrl = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/";
   
   // The critical files to get the system running
   const files = [
@@ -21,6 +21,8 @@ export async function main(ns) {
   
   ns.tprint("╔════════════════════════════════════════════╗");
   ns.tprint("║       BOOTSTRAP SCRIPT DOWNLOADER          ║");
+  ns.tprint("╠════════════════════════════════════════════╣");
+  ns.tprint(`║ Source: ${githubUrl}       ║`);
   ns.tprint("╠════════════════════════════════════════════╣");
   
   ns.tprint("Downloading core files...");

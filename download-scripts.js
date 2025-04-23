@@ -18,14 +18,14 @@ export async function main(ns) {
   const currentFilePath = ns.getScriptName();
   const currentDirectory = ns.getHostname();
   
-  // Base URL for raw GitHub content - modify with your actual GitHub username and repository
-  const baseUrl = "https://raw.githubusercontent.com/skyec/bitburnerFiles-1/main/";
+  // Base URL for raw GitHub content - correct repository URL
+  const baseUrl = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/";
 
   // Download each script
   ns.tprint("╔═════════════════════════════════════════════╗");
   ns.tprint("║ DOWNLOADING SCRIPTS TO BITBURNER            ║");
   ns.tprint("╠═════════════════════════════════════════════╣");
-  ns.tprint(`║ Source: ${baseUrl}                  ║`);
+  ns.tprint(`║ Source: ${baseUrl}     ║`);
   ns.tprint("╠═════════════════════════════════════════════╣");
 
   let successCount = 0;

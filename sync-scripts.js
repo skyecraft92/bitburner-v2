@@ -6,30 +6,68 @@ const home = "home";
 
 /** @param {NS} ns */
 export async function main(ns) {
-    let scan = (server, parent) => ns.scan(server)
-        .map(newServer => newServer != parent ? scan(newServer, server) : server).flat();
-    ["scan", "scp"].forEach(log => ns.disableLog(log));
-    const serverList = scan(home);
-    do {
-        const fileList = ns.ls(home);
-        const latestContents = Object.fromEntries(fileList.map(s => [s, ns.read(s)]));
-        for (const server of serverList.filter(s => s != home)) {
-            const serverFiles = ns.ls(server); // What files does the server have
-            for (const file of serverFiles.filter(s => fileList.includes(s))) {
-                await ns.scp(file, home, server); // No way to read a remote file, so we have to temporarily copy it home
-                if (ns.read(file) != latestContents[file]) { // Remote file was out of date.
-                    ns.print(`The file ${file} was out of date on ${server}. Updating...`);
-                    await ns.write(file, latestContents[file], "w"); // Restore original home file
-                    await ns.scp(file, server, home); // Update the remote copy
-                    const runningInstances = ns.ps(server).filter(p => p.filename == file);
-                    runningInstances.forEach(p => { // Restart any running instances
-                        ns.print(`Restarting script ${file} on ${server} (was running with pid ${p.pid})...`);
-                        ns.kill(p.pid);
-                        ns.exec(p.filename, server, p.threads, ...p.args);
-                    })
-                }
+    // List of core scripts to sync to the game
+    const scripts = [
+        "daemon-smart.js",
+        "hacknet-pro.js",
+        "upgrade-home.js",
+        "stockmaster.js",
+        "sleeve.js",
+        "bladeburner.js",
+        "helpers.js"
+    ];
+    
+    const port = ns.getPortHandle(1);
+    if (!port) {
+        ns.tprint("ERROR: Can't get port handle. Make sure you have the required source files.");
+        return;
+    }
+    
+    // Clear port
+    port.clear();
+    
+    ns.tprint("╔════════════════════════════════════════════╗");
+    ns.tprint("║        BITBURNER FILE SYNC UTILITY         ║");
+    ns.tprint("╠════════════════════════════════════════════╣");
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const script of scripts) {
+        try {
+            // Get file content
+            const content = ns.read(script);
+            
+            if (!content) {
+                ns.tprint(`❌ Failed to read ${script}: File not found or empty`);
+                failCount++;
+                continue;
             }
+            
+            // Write data to port in the format expected by the game
+            const data = {
+                filename: script,
+                content: content
+            };
+            
+            // Push to port
+            port.write(JSON.stringify(data));
+            ns.tprint(`✅ Synced ${script} to game`);
+            successCount++;
+            
+            // Small delay between operations
+            await ns.sleep(100);
+        } catch (error) {
+            ns.tprint(`❌ Error syncing ${script}: ${error}`);
+            failCount++;
         }
-        if (loopingMode) await ns.sleep(1000);
-    } while (loopingMode);
+    }
+    
+    ns.tprint("╠════════════════════════════════════════════╣");
+    ns.tprint(`║ Sync complete: ${successCount} success, ${failCount} failed     ║`);
+    ns.tprint("╚════════════════════════════════════════════╝");
+    
+    if (successCount > 0) {
+        ns.tprint("\nTo run the smart daemon, use: run daemon-smart.js");
+    }
 }

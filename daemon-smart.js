@@ -468,7 +468,7 @@ export async function main(ns) {
         // Add other core scripts managed by the daemon here
     ];
     // Define source/repo URL (replace with your actual repo URL)
-    const baseUrl = "http://localhost:8000/"; // Or raw GitHub URL etc.
+    const baseUrl = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/"; // Updated to GitHub raw URL
 
     let allDownloadsSuccessful = true;
     for (const script of scriptsToDownload) {

@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "1.8.0"; // Version identifier - Dynamic target count, responsive server buying
+export const DAEMON_VERSION = "1.9.0"; // Version identifier - Fixed dependency download URL
 const CONFIG_FILE = 'daemon-config.txt';
 
 export async function main(ns) {

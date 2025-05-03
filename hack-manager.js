@@ -2,7 +2,8 @@
 export async function main(ns) {
   // --- Configuration ---
   const config = {
-    targetCount: 3,                // Number of targets to manage simultaneously
+    baseTargetCount: 5,          // Starting number of targets
+    ramPerTargetThreshold: 1024, // Add another target slot for every X GB of total worker RAM
     moneyPercentToHack: 0.5,     // Target % of server money to hack (e.g., 0.5 = 50%)
     securityThresholdPadding: 3, // Keep security this much above minimum
     reserveHomeRam: 16,          // Keep this much RAM free on home
@@ -22,12 +23,17 @@ export async function main(ns) {
       "relaySMTP.exe": ns.relaysmtp,
       "HTTPWorm.exe": ns.httpworm,
       "SQLInject.exe": ns.sqlinject
-    }
+    },
+    statusPort: 1,               // Port for communicating RAM needs
+    ramNeedThreshold: 3          // Consecutive cycles with allocation failures to trigger RAM_NEEDED
   };
 
   // --- Script State ---
   let managedTargets = []; // Array of {hostname, prepComplete, assignedRam}
-  let workerServers = [];  // Array of {hostname, maxRam, usedRam}
+  let workerServers = [];  // Array of {hostname, maxRam, usedRam, availableRam}
+  let allocationFailureStreak = 0; // Counter for consecutive allocation failures
+  let currentMaxTargets = config.baseTargetCount; // Initialize target count
+  let lastCycleAllocationFailed = false; // Track if the *entire* last cycle failed to allocate threads
 
   // --- Initialization ---
   ns.disableLog("ALL");
@@ -43,13 +49,17 @@ export async function main(ns) {
       // 2. Scan and Find Potential Targets
       const potentialTargets = findPotentialTargets();
 
-      // 3. Select and Prioritize Targets
-      selectAndManageTargets(potentialTargets);
+      // 3. Calculate Dynamic Target Count & Select Targets
+      updateDynamicTargetCount(); // Calculate based on current RAM
+      selectAndManageTargets(potentialTargets, currentMaxTargets); // Pass dynamic count
 
       // 4. Assign Workers to Targets
-      await assignWorkersToTargets();
+      lastCycleAllocationFailed = await assignWorkersToTargets(); // Returns true if allocation failed
       
-      // 5. Display Status (Optional)
+      // 5. Update RAM Need Status on Port
+      updateRamNeedStatus(lastCycleAllocationFailed);
+
+      // 6. Display Status
       displayStatus();
 
     } catch (e) {
@@ -171,7 +181,27 @@ export async function main(ns) {
     return false;
   }
 
-  function selectAndManageTargets(potentialTargets) {
+  function updateDynamicTargetCount() {
+      // Calculate total MAX RAM across all worker servers (including home if used)
+      let totalWorkerMaxRam = 0;
+      workerServers.forEach(s => {
+          // Use the original maxRam stored, not the calculated availableRam
+          totalWorkerMaxRam += s.maxRam; 
+          // If home is a worker, its maxRam was already adjusted for reserve in updateWorkerServers
+          // Let's re-evaluate if that's the best way. Simpler might be to use getServerMaxRam here.
+      });
+
+      // Refined calculation: Sum max RAM from purchased servers + actual home max RAM if used
+      totalWorkerMaxRam = ns.getPurchasedServers().reduce((sum, s) => sum + ns.getServerMaxRam(s), 0);
+      if (config.useHomeServer && workerServers.some(s => s.hostname === 'home')) {
+          totalWorkerMaxRam += ns.getServerMaxRam('home'); // Add full home RAM
+      }
+
+      currentMaxTargets = config.baseTargetCount + Math.floor(totalWorkerMaxRam / config.ramPerTargetThreshold);
+      // log(`Total Worker Max RAM: ${totalWorkerMaxRam.toFixed(1)}GB. Dynamic Target Count: ${currentMaxTargets}`);
+  }
+
+  function selectAndManageTargets(potentialTargets, maxTargets) {
     // Sort potential targets (e.g., by max money, adjust later)
     potentialTargets.sort((a, b) => ns.getServerMaxMoney(b) - ns.getServerMaxMoney(a));
 
@@ -189,7 +219,7 @@ export async function main(ns) {
     // Add new targets if needed
     let added = 0;
     for (const target of potentialTargets) {
-      if (managedTargets.length >= config.targetCount) break;
+      if (managedTargets.length >= maxTargets) break; // Use dynamic maxTargets
       if (!managedTargets.some(t => t.hostname === target)) {
         managedTargets.push({ hostname: target, prepComplete: false, assignedRam: 0 });
         added++;
@@ -198,8 +228,8 @@ export async function main(ns) {
     // if (added > 0) log(`Added ${added} new targets. Managing: ${managedTargets.map(t=>t.hostname).join(', ')}`);
 
     // Trim excess targets if any (e.g., if config.targetCount decreased)
-    if (managedTargets.length > config.targetCount) {
-        managedTargets.splice(config.targetCount);
+    if (managedTargets.length > maxTargets) { // Use dynamic maxTargets
+        managedTargets.splice(maxTargets);
     }
   }
 
@@ -220,7 +250,7 @@ export async function main(ns) {
 
     if (totalAvailableRam <= 0) {
         // log("No worker RAM available.", "warn"); // Keep this less noisy maybe
-        return;
+        return true; // Indicate allocation failure (no RAM)
     }
 
     // Reset assigned RAM for targets
@@ -228,6 +258,9 @@ export async function main(ns) {
     let ramAllocatedThisCycle = 0;
     // Temporary detailed logging
     // log(`Starting allocation cycle. Total Available RAM: ${totalAvailableRam.toFixed(1)}GB`);
+
+    let totalThreadsAttempted = 0;
+    let totalThreadsExecuted = 0;
 
     for (const targetInfo of managedTargets) {
       const target = targetInfo.hostname;
@@ -313,17 +346,22 @@ export async function main(ns) {
         // log(`ALLOCATING ${threadsToRun} threads (${ramToAllocate.toFixed(1)}GB RAM) for ${action} on ${target}`);
         
         // Distribute and execute workers
-        await distributeAndRun(action, threadsToRun, target);
+        const { success, threadsExecuted } = await distributeAndRun(action, threadsToRun, target);
+        totalThreadsAttempted += threadsToRun;
+        totalThreadsExecuted += threadsExecuted;
       } else {
         // log(`Could not run threads for ${action} on ${target}. RAM Need: ${requiredRam.toFixed(1)}GB, Pool Share Limit: ${poolShareLimit.toFixed(1)}GB, Pool Remaining: ${remainingRamInPool.toFixed(1)}GB, Calculated Threads: ${threadsToRun}`);
       }
     }
      // log(`Finished allocation cycle. Total RAM allocated: ${ramAllocatedThisCycle.toFixed(1)}GB`);
+     // Return true if any threads failed to execute fully
+     return totalThreadsAttempted > totalThreadsExecuted; 
   }
 
   async function distributeAndRun(script, totalThreads, target) {
     let threadsRemaining = totalThreads;
     const scriptRamCost = ns.getScriptRam(script);
+    let threadsExecuted = 0; // Track successful executions
 
     // Sort workers by available RAM (largest first) - recalculate available RAM accurately here
     workerServers.forEach(s => {
@@ -371,6 +409,7 @@ export async function main(ns) {
         if (pid > 0) {
            // log(`Launched ${script} on ${server.hostname} (${threadsToRun} threads) for ${target}.`);
            threadsRemaining -= threadsToRun;
+           threadsExecuted += threadsToRun; // Increment successful threads
            // Update availableRam *immediately* for the next iteration within this function
            server.availableRam -= threadsToRun * scriptRamCost; 
            // No need to update server.usedRam here as ns.getServerUsedRam will fetch it next cycle
@@ -378,12 +417,46 @@ export async function main(ns) {
            log(`Failed to exec ${script} on ${server.hostname} (${threadsToRun} threads/${(threadsToRun*scriptRamCost).toFixed(1)}GB) for ${target}. RAM Available: ${availableRamOnServer.toFixed(1)}GB`, "warn");
         }
     }
+    // Return success status and number of threads actually executed
+    return { success: threadsRemaining <= 0, threadsExecuted: threadsExecuted }; 
   }
   
+  function updateRamNeedStatus(allocationFailed) {
+      if (allocationFailed) {
+          allocationFailureStreak++;
+          // log(`Allocation failed this cycle. Streak: ${allocationFailureStreak}`);
+      } else {
+          if (allocationFailureStreak > 0) {
+              // log(`Allocation succeeded. Resetting failure streak.`);
+          }
+          allocationFailureStreak = 0; // Reset streak on success
+      }
+
+      // Write status to port
+      ns.clearPort(config.statusPort); // Clear before writing new status
+      if (allocationFailureStreak >= config.ramNeedThreshold) {
+          const writeSuccess = ns.tryWritePort(config.statusPort, "RAM_NEEDED");
+          if (!writeSuccess) {
+              ns.print(`[WARN] Failed to write RAM_NEEDED status to port ${config.statusPort}. Port might be full.`);
+          } else {
+              // log(`Signaled RAM_NEEDED on port ${config.statusPort}.`);
+          }
+      } else {
+          // Optionally write RAM_OK or just leave it empty
+           const writeSuccess = ns.tryWritePort(config.statusPort, "RAM_OK");
+           if (!writeSuccess && ns.peek(config.statusPort) !== "RAM_OK") { // Avoid warning if already OK
+                ns.print(`[WARN] Failed to write RAM_OK status to port ${config.statusPort}. Port might be full.`);
+           } else {
+                // log(`Signaled RAM_OK on port ${config.statusPort}.`);
+           }
+      }
+  }
+
   function displayStatus() {
     ns.clearLog(); // Clear previous log entries
     ns.print("\n--- Hack Manager Status ---");
-    ns.print(`Managing ${managedTargets.length}/${config.targetCount} targets. Cycle: ${config.cycleTime/1000}s`);
+    // Display dynamic target count
+    ns.print(`Managing up to ${currentMaxTargets} targets (${managedTargets.length} active). Cycle: ${config.cycleTime/1000}s`); 
     const purchasedServers = workerServers.filter(s => s.hostname !== 'home');
     const homeWorkerEntry = workerServers.find(s => s.hostname === 'home');
     ns.print(`Worker Servers: ${purchasedServers.length} purchased + ${homeWorkerEntry ? 'home' : 'home (not used)'}`);
@@ -430,6 +503,10 @@ export async function main(ns) {
         ns.print(` ${targetInfo.hostname.padEnd(18)} | $${formatMoney(money)}/$${formatMoney(maxMoney)} (${(money/maxMoney*100).toFixed(1)}%) | Sec ${security.toFixed(1)}/${minSecurity.toFixed(1)} | ${prep.padEnd(8)} | RAM: ${targetInfo.assignedRam.toFixed(1)}GB`);
     }
     ns.print("-------------------------------------------------------------------");
+     // Display RAM Need Status
+     const ramStatus = ns.peek(config.statusPort);
+     ns.print(`RAM Need Status (Port ${config.statusPort}): ${ramStatus === "RAM_NEEDED" ? "!! NEEDED !=" : "OK"} (Streak: ${allocationFailureStreak})`);
+     ns.print("===================================================================");
   }
   
   // --- Logging and Formatting Helpers (Duplicate from buy-servers, move to helpers.js later) ---

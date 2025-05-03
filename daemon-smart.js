@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "1.7.0"; // Version identifier - Added backdoor manager & version alignment
+export const DAEMON_VERSION = "1.8.0"; // Version identifier - Dynamic target count, responsive server buying
 const CONFIG_FILE = 'daemon-config.txt';
 
 export async function main(ns) {

@@ -131,6 +131,16 @@ export async function main(ns) {
     return upgrades;
   }
   
+  // Function to get the total production rate of all nodes
+  function getTotalProduction() {
+    let totalProduction = 0;
+    const nodeCount = ns.hacknet.numNodes();
+    for (let i = 0; i < nodeCount; i++) {
+      totalProduction += ns.hacknet.getNodeStats(i).production;
+    }
+    return totalProduction; // Hashes per second
+  }
+  
   // Function to get the value of hashes
   function hashValue() {
     // The typical conversion is about $1M per 4 hashes when selling for money
@@ -314,12 +324,12 @@ export async function main(ns) {
       }
       
       // Buy best upgrade
-      const spent = await buyBestUpgrade();
+      let upgradeCost = await buyBestUpgrade();
       
       // If we bought something, adjust variables
-      if (spent !== false) {
-        totalSpent += spent;
-        config.maxSpend -= spent;
+      if (upgradeCost !== false) {
+        totalSpent += upgradeCost;
+        config.maxSpend -= upgradeCost;
         
         // If we can't spend any more, exit continuous mode
         if (config.maxSpend <= 0) {
@@ -332,8 +342,48 @@ export async function main(ns) {
         break;
       }
       
-      // Sleep between checks
-      await ns.sleep(config.interval);
+      // --- Dynamic Sleep Logic --- 
+      let sleepTime = config.interval; // Default interval
+      if (config.runContinuously && upgradeCost === false) { // Only adjust sleep if no upgrade was bought
+          const upgrades = getUpgrades();
+          upgrades.sort((a, b) => a.payoffTime - b.payoffTime); // Sort by payoff primarily
+          
+          const affordableUpgrades = upgrades.filter(u => u.cost <= (ns.getPlayer().money - config.reserveMoney) && u.payoffTime <= config.maxPayoffTime);
+          const nextBestUpgrade = upgrades.find(u => u.cost > (ns.getPlayer().money - config.reserveMoney) && u.payoffTime <= config.maxPayoffTime);
+
+          if (affordableUpgrades.length > 0) {
+              // If we could afford something but didn't buy it (maybe bug?), use short interval
+              sleepTime = 1000; 
+              log(`Could afford upgrades but didn't buy. Check logic. Using ${sleepTime}ms sleep.`, 2);
+          } else if (nextBestUpgrade) {
+              const moneyNeeded = nextBestUpgrade.cost - (ns.getPlayer().money - config.reserveMoney);
+              const totalProd = getTotalProduction(); // Hashes/sec
+              const incomeRate = totalProd * hashValue(); // $/sec (approx, assumes selling hashes)
+              
+              if (incomeRate > 0) {
+                  const timeToAffordSec = moneyNeeded / incomeRate;
+                  // Sleep for 1/10th the time to afford, capped between 1s and 60s
+                  sleepTime = Math.max(1000, Math.min(60000, (timeToAffordSec * 1000) / 10));
+                  log(`Next upgrade costs ${formatMoney(nextBestUpgrade.cost)}. Need ${formatMoney(moneyNeeded)}. Est time: ${formatTime(timeToAffordSec)}. Sleeping for ${formatTime(sleepTime / 1000)}.`, 2);
+              } else {
+                   // No income, use longer default sleep
+                   sleepTime = 30000;
+                   log(`No hacknet income detected. Sleeping for ${formatTime(sleepTime / 1000)}.`, 2);
+              }
+          } else {
+              // No affordable upgrades and no next best found (maxed out or too expensive?)
+              sleepTime = 60000; // Check less often
+              log(`No suitable upgrades found. Sleeping for ${formatTime(sleepTime / 1000)}.`, 2);
+          }
+      }
+      // --- End Dynamic Sleep Logic --- 
+      
+      // Wait before next cycle
+      if (config.runContinuously) {
+        await ns.sleep(sleepTime);
+      } else {
+        break; // Exit if not running continuously
+      }
     } catch (error) {
       log(`ERROR: ${error}`, 0);
       await ns.sleep(5000);

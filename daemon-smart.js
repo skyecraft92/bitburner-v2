@@ -29,6 +29,15 @@ export async function main(ns) {
         args: [],             // Arguments to pass to the script
         fallback: "hacknet-basic.js" // Fallback script if this fails
       },
+      "hack-manager.js": { // Added hacking controller
+        enabled: true,
+        singleton: true,
+        ramCheck: true,
+        priority: 2,        // High priority for hacking income
+        tail: true,
+        args: []
+        // No source file requirement needed for basic hack/grow/weaken
+      },
       "hacknet-basic.js": { // Added entry for fallback awareness
         enabled: false,      // Not enabled directly, only as fallback
         singleton: true,
@@ -49,7 +58,7 @@ export async function main(ns) {
         enabled: true,
         singleton: true,
         ramCheck: true,
-        priority: 2,
+        priority: 3,        // Shifted priority down
         tail: true,
         args: [],
         sourceFileRequirement: 4, // Requires SF4
@@ -59,7 +68,7 @@ export async function main(ns) {
         enabled: false,
         singleton: true,
         ramCheck: true,
-        priority: 2,
+        priority: 3,        // Shifted priority down
         tail: true,
         args: []
       },
@@ -75,7 +84,7 @@ export async function main(ns) {
         enabled: false,       // Disable until we have TIX API
         singleton: true,
         ramCheck: true,
-        priority: 3,
+        priority: 4,        // Shifted priority down
         tail: true,
         args: [],
         requiresWse: true, // Explicit flag for WSE requirement
@@ -85,15 +94,24 @@ export async function main(ns) {
         enabled: false,
         singleton: true,
         ramCheck: true,
-        priority: 3,
+        priority: 4,        // Shifted priority down
         tail: true,
         args: []
+      },
+      "buy-servers.js": { // Added server purchasing script
+        enabled: true,      // Enable by default
+        singleton: true,
+        ramCheck: true,
+        priority: 5,        // Shifted priority down
+        tail: true,         // Useful to see purchase logs
+        args: [],
+        sourceFileRequirement: 4 // Requires SF4 for ns.purchaseServer
       },
       "sleeve.js": {
         enabled: false,      // Requires BN10
         singleton: true,
         ramCheck: true,
-        priority: 5,
+        priority: 6,        // Shifted priority down
         tail: false,
         args: [],
         sourceFileRequirement: 10  // Explicitly requires SF10
@@ -102,7 +120,7 @@ export async function main(ns) {
         enabled: false,      // Requires SF6/SF7
         singleton: true,
         ramCheck: true,
-        priority: 5,
+        priority: 6,        // Shifted priority down
         tail: false,
         args: [],
         sourceFileRequirement: 6  // Explicitly requires SF6

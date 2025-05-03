@@ -253,6 +253,10 @@ export async function main(ns) {
 
     // --- Pre-checks that might trigger fallback logic --- 
 
+    // *** DEBUG LOGGING START ***
+    ns.print(`DEBUG: Checking ${scriptName}. SF Req: ${configToUse.sourceFileRequirement}, Has SF? ${hasSourceFile(configToUse.sourceFileRequirement || 0)}`);
+    // *** DEBUG LOGGING END ***
+
     // Check for source file requirements 
     if (configToUse.sourceFileRequirement && !hasSourceFile(configToUse.sourceFileRequirement)) {
       if (!config.suppressSourceFileWarnings) {

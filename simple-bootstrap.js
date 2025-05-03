@@ -155,15 +155,17 @@ export async function main(ns) {
                   const fallbackName = fallbackScripts[missingFile];
                   if (fallbackContent[fallbackName]) { // Check if fallback content exists
                       try {
-                          ns.tprint(`Writing fallback: ${fallbackName} -> ${missingFile}`);
-                          await ns.write(missingFile, fallbackContent[fallbackName], "w");
+                          ns.tprint(`Writing fallback content from '${fallbackName}' into -> ${missingFile}`);
+                          // Ensure we write the fallback content INTO the missing primary file
+                          await ns.write(missingFile, fallbackContent[fallbackName], "w"); 
                           ns.tprint(`✓ Applied fallback for ${missingFile}`);
-                          // Check if the file exists now
-                           if (!ns.fileExists(missingFile)) {
+                          // Verify the file was written
+                           if (!ns.fileExists(missingFile)) { 
                                ns.tprint(`✗ ERROR: Failed to write fallback file ${missingFile}`);
                            } else {
-                              // If fallback was applied, remove from missing list
+                              // If fallback was applied successfully, remove from missing list
                               missingFiles = missingFiles.filter(f => f !== missingFile);
+                              ns.tprint(` -> ${missingFile} now exists.`);
                            }
                       } catch (error) {
                            ns.tprint(`✗ ERROR writing fallback for ${missingFile}: ${error}`);

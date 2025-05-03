@@ -1,5 +1,12 @@
 /** @param {NS} ns */
 export async function main(ns) {
+  // Get the current game options
+  const options = ns.flags([
+    ["download-deps", false],  // Flag to download dependencies
+    ["help", false],           // Help flag
+    ["suppress-warnings", false] // Suppress Source File requirement warnings
+  ]);
+  
   // Configuration - RAM Management
   const config = {
     reservedRam: 8,           // GB of RAM to reserve for other scripts
@@ -8,6 +15,7 @@ export async function main(ns) {
     cycleSleepTime: 10000,    // Time to sleep between cycles (ms)
     earlyGame: true,          // Set to true for early game (disables late-game features)
     processManagement: true,  // Actively manage processes to prevent duplicates
+    suppressSourceFileWarnings: options["suppress-warnings"], // Whether to suppress Source File requirement warnings
     scriptConfig: {
       // Define what scripts to run and their properties
       "hacknet-pro.js": {
@@ -32,7 +40,8 @@ export async function main(ns) {
         ramCheck: true,
         priority: 2,
         tail: true,
-        args: []
+        args: [],
+        sourceFileRequirement: 4  // Requires SF4 but can run with warnings
       },
       "daemon.js": {
         enabled: false,       // Disabled by default
@@ -56,7 +65,8 @@ export async function main(ns) {
         ramCheck: true,
         priority: 5,
         tail: false,
-        args: []
+        args: [],
+        sourceFileRequirement: 10  // Explicitly requires SF10
       },
       "bladeburner.js": {
         enabled: false,      // Requires SF6/SF7
@@ -64,10 +74,29 @@ export async function main(ns) {
         ramCheck: true,
         priority: 5,
         tail: false,
-        args: []
+        args: [],
+        sourceFileRequirement: 6  // Explicitly requires SF6
       }
     }
   };
+  
+  // Handle special command-line options
+  if (options.help) {
+    ns.tprint("╔════════════════════════════════════════════╗");
+    ns.tprint("║          SMART DAEMON HELP                 ║");
+    ns.tprint("╠════════════════════════════════════════════╣");
+    ns.tprint("║ --download-deps    : Download dependencies ║");
+    ns.tprint("║ --suppress-warnings: Hide SF requirements  ║");
+    ns.tprint("║ --help             : Display help message  ║");
+    ns.tprint("╚════════════════════════════════════════════╝");
+    return;
+  }
+  
+  // Handle downloading dependencies
+  if (options["download-deps"]) {
+    await downloadDependencies(ns);
+    return;
+  }
   
   // Prevent running multiple instances
   if (ns.isRunning("daemon-smart.js", "home") && ns.getRunningScript().pid !== ns.pid) {
@@ -168,6 +197,18 @@ export async function main(ns) {
     return ns.getScriptRam(scriptName, "home");
   }
   
+  // Check if we have a specific Source File
+  function hasSourceFile(sourceFileNumber) {
+    try {
+      const sourceFiles = ns.singularity.getOwnedSourceFiles();
+      return sourceFiles.some(sf => sf.n === sourceFileNumber);
+    } catch (error) {
+      // If we get an error, we don't have access to singularity API
+      // which means we definitely don't have SF4
+      return false;
+    }
+  }
+  
   // Start a script if it's not already running
   async function startScript(scriptName, scriptConfig) {
     // Check if the script should be run
@@ -181,9 +222,20 @@ export async function main(ns) {
       return false;
     }
     
+    // Check for source file requirements
+    if (scriptConfig.sourceFileRequirement) {
+      const hasRequired = hasSourceFile(scriptConfig.sourceFileRequirement);
+      if (!hasRequired && !config.suppressSourceFileWarnings) {
+        ns.print(`${scriptName} requires Source-File ${scriptConfig.sourceFileRequirement}, but you don't have it yet.`);
+        // Don't return here - we'll still try to run the script, it may handle the missing source file gracefully
+      }
+    }
+    
     // Special validation for scripts with known startup checks
     if (scriptName === "stockmaster.js" && !ns.stock.hasWSEAccount()) {
-      ns.print(`${scriptName} requires WSE Account, skipping`);
+      if (!config.suppressSourceFileWarnings) {
+        ns.print(`${scriptName} requires WSE Account, skipping`);
+      }
       return false;
     }
     
@@ -191,11 +243,15 @@ export async function main(ns) {
       try {
         const numSleeves = ns.sleeve.getNumSleeves();
         if (numSleeves <= 0) {
-          ns.print(`${scriptName} requires sleeves from BN10, skipping`);
+          if (!config.suppressSourceFileWarnings) {
+            ns.print(`${scriptName} requires sleeves from BN10, skipping`);
+          }
           return false;
         }
-      } catch {
-        ns.print(`${scriptName} requires sleeves from BN10, skipping`);
+      } catch (error) {
+        if (!config.suppressSourceFileWarnings) {
+          ns.print(`${scriptName} requires sleeves from BN10, skipping`);
+        }
         return false;
       }
     }
@@ -204,11 +260,15 @@ export async function main(ns) {
       try {
         const hasBladeburner = ns.bladeburner.inBladeburner();
         if (!hasBladeburner) {
-          ns.print(`${scriptName} requires SF6/SF7 and joining Bladeburners, skipping`);
+          if (!config.suppressSourceFileWarnings) {
+            ns.print(`${scriptName} requires SF6/SF7 and joining Bladeburners, skipping`);
+          }
           return false;
         }
-      } catch {
-        ns.print(`${scriptName} requires SF6/SF7, skipping`);
+      } catch (error) {
+        if (!config.suppressSourceFileWarnings) {
+          ns.print(`${scriptName} requires SF6/SF7, skipping`);
+        }
         return false;
       }
     }
@@ -224,7 +284,16 @@ export async function main(ns) {
     
     // Run the script
     try {
-      const pid = ns.run(scriptName, 1, ...scriptConfig.args);
+      // Prepare suppression argument if needed
+      const args = [...scriptConfig.args];
+      
+      // Add source file warning suppression if configured
+      if (config.suppressSourceFileWarnings && 
+          scriptConfig.sourceFileRequirement) {
+        args.push("--suppress-warnings");
+      }
+      
+      const pid = ns.run(scriptName, 1, ...args);
       
       if (pid > 0) {
         ns.print(`Started ${scriptName} (PID: ${pid})`);
@@ -245,7 +314,9 @@ export async function main(ns) {
         return false;
       }
     } catch (error) {
-      ns.print(`Error starting ${scriptName}: ${error}`);
+      if (!config.suppressSourceFileWarnings) {
+        ns.print(`Error starting ${scriptName}: ${error}`);
+      }
       return false;
     }
   }
@@ -275,6 +346,58 @@ export async function main(ns) {
     }
     
     return false;
+  }
+  
+  // Download dependencies function
+  async function downloadDependencies(ns) {
+    const githubUrl = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/";
+    
+    const dependencies = [
+      "hacknet-pro.js",
+      "upgrade-home.js", 
+      "stockmaster.js",
+      "sleeve.js",
+      "bladeburner.js",
+      "helpers.js"
+    ];
+    
+    ns.tprint("╔════════════════════════════════════════════╗");
+    ns.tprint("║       DOWNLOADING DEPENDENCIES             ║");
+    ns.tprint("╠════════════════════════════════════════════╣");
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (const file of dependencies) {
+      const url = githubUrl + file;
+      try {
+        ns.tprint(`Downloading ${file}...`);
+        const success = await ns.wget(url, file);
+        
+        if (success) {
+          ns.tprint(`✓ Downloaded ${file}`);
+          successCount++;
+        } else {
+          ns.tprint(`✗ Failed to download ${file}`);
+          failCount++;
+        }
+      } catch (error) {
+        ns.tprint(`✗ Error downloading ${file}: ${error}`);
+        failCount++;
+      }
+      
+      // Small delay between downloads
+      await ns.sleep(300);
+    }
+    
+    ns.tprint("╠════════════════════════════════════════════╣");
+    ns.tprint(`║ ${successCount}/${dependencies.length} files downloaded     ║`);
+    ns.tprint("╚════════════════════════════════════════════╝");
+    
+    if (successCount > 0) {
+      ns.tprint("\nNow run daemon-smart.js without parameters to start the daemon");
+      ns.tprint("Or use --suppress-warnings to hide Source File requirement warnings");
+    }
   }
   
   // Display system status
@@ -391,14 +514,19 @@ export async function main(ns) {
   function updateFeatureAvailability() {
     try {
       // Check if player has TIX API access
-      const hasTixApi = ns.stock.hasWSEAccount() && ns.stock.hasTIXAPIAccess();
-      config.scriptConfig["stockmaster.js"].enabled = hasTixApi;
+      try {
+        const hasTixApi = ns.stock.hasWSEAccount() && ns.stock.hasTIXAPIAccess();
+        config.scriptConfig["stockmaster.js"].enabled = hasTixApi;
+      } catch (e) {
+        // Stock API not available yet
+        config.scriptConfig["stockmaster.js"].enabled = false;
+      }
       
       // Check sleeves
       try {
         const numSleeves = ns.sleeve.getNumSleeves();
         config.scriptConfig["sleeve.js"].enabled = numSleeves > 0;
-      } catch {
+      } catch (e) {
         config.scriptConfig["sleeve.js"].enabled = false;
       }
       
@@ -406,12 +534,21 @@ export async function main(ns) {
       try {
         const hasBladeburner = ns.bladeburner.inBladeburner();
         config.scriptConfig["bladeburner.js"].enabled = hasBladeburner;
-      } catch {
+      } catch (e) {
         config.scriptConfig["bladeburner.js"].enabled = false;
       }
+      
+      // Check for Source File 4 (Singularity)
+      const hasSF4 = hasSourceFile(4);
+      if (!hasSF4 && config.scriptConfig["upgrade-home.js"].enabled && !config.suppressSourceFileWarnings) {
+        ns.print("Source-File 4 not detected, upgrade-home.js will run with limited functionality");
+      }
+      
     } catch (error) {
       // If any check fails, it's likely the feature isn't available
-      ns.print(`Error checking feature availability: ${error}`);
+      if (!config.suppressSourceFileWarnings) {
+        ns.print(`Error checking feature availability: ${error}`);
+      }
     }
   }
   
@@ -464,7 +601,9 @@ export async function main(ns) {
           
           // Check if we have enough RAM
           if (scriptConfig.ramCheck && scriptRam > availableRam) {
-            ns.print(`Insufficient RAM for ${scriptName} (need ${scriptRam.toFixed(1)}GB, have ${availableRam.toFixed(1)}GB)`);
+            if (!config.suppressSourceFileWarnings) {
+              ns.print(`Insufficient RAM for ${scriptName} (need ${scriptRam.toFixed(1)}GB, have ${availableRam.toFixed(1)}GB)`);
+            }
             continue;
           }
           
@@ -479,7 +618,9 @@ export async function main(ns) {
         }
       }
     } catch (error) {
-      ns.print(`ERROR in daemon cycle: ${error}`);
+      if (!config.suppressSourceFileWarnings) {
+        ns.print(`ERROR in daemon cycle: ${error}`);
+      }
     }
     
     // Sleep until the next cycle

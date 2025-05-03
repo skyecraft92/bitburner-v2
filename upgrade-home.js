@@ -1,5 +1,10 @@
 /** @param {NS} ns */
 export async function main(ns) {
+  // Check command line arguments
+  const args = ns.flags([
+    ["suppress-warnings", false]
+  ]);
+  
   // Configuration options
   const config = {
     keepMoney: 100000,         // How much money to keep in reserve (100k)
@@ -9,7 +14,8 @@ export async function main(ns) {
     cycleSleepTime: 5000,      // Time to wait between upgrade checks (ms)
     buyTorRouter: true,        // Whether to buy TOR router
     buyPrograms: true,         // Whether to buy hacking programs through dark web
-    logLevel: 1                // 0=minimal, 1=normal, 2=verbose
+    logLevel: 1,               // 0=minimal, 1=normal, 2=verbose
+    suppressWarnings: args["suppress-warnings"] // Whether to suppress Source File warnings
   };
   
   // Helper function to format money
@@ -35,6 +41,35 @@ export async function main(ns) {
     }
   }
   
+  // Function to safely call singularity functions and handle errors silently
+  function safeSingularity(functionName, ...args) {
+    try {
+      return {
+        success: true,
+        result: ns.singularity[functionName](...args)
+      };
+    } catch (error) {
+      if (!config.suppressWarnings && error.message.includes("Source-File 4")) {
+        log(`Cannot use ${functionName}: Requires Source-File 4`, 2);
+      }
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  // Function to check if Singularity API is available
+  function checkSingularityAccess() {
+    try {
+      // This method will throw an error if you don't have Source-File 4
+      ns.singularity.getOwnedSourceFiles();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+  
   // Open a tail window
   ns.tail();
   ns.disableLog("ALL");
@@ -45,37 +80,67 @@ export async function main(ns) {
   ns.tprint("║ Automatically upgrades RAM, cores & TOR ║");
   ns.tprint("╚═════════════════════════════════════════╝");
   
-  // Get initial stats
+  // Check if Singularity functions are available (SF-4)
+  const hasSingularityAccess = checkSingularityAccess();
+  
+  if (!hasSingularityAccess && !config.suppressWarnings) {
+    ns.tprint("⚠️ WARNING: This script requires Source-File 4 to fully function.");
+    ns.tprint("It will run in monitoring mode only until you obtain SF-4.");
+    ns.tprint("The script will continue running but won't be able to perform upgrades.");
+  }
+  
+  // Get initial stats - these are always available without Singularity
   let homeRam = ns.getServerMaxRam("home");
   let cores = ns.getServer("home").cpuCores;
-  let hasTor = ns.getPlayer().tor;
+  let hasTor = false;
   let upgradedSomething = false;
+  
+  // Try to safely get Tor status
+  try {
+    hasTor = ns.getPlayer().tor;
+  } catch (error) {
+    hasTor = false;
+  }
   
   log(`Starting with ${homeRam}GB RAM and ${cores} cores`, 0);
   
   // Main upgrade loop
   while (true) {
     try {
-      // Get current player money
+      // Get current player money - always available
       const money = ns.getPlayer().money;
       const reserveMoney = Math.max(config.keepMoney, 100000); // Always keep at least 100k
       
-      // Update current home specs
+      // Update current home specs - always available
       homeRam = ns.getServerMaxRam("home");
       cores = ns.getServer("home").cpuCores;
-      hasTor = ns.getPlayer().tor;
+      
+      // Try to safely get Tor status
+      try {
+        hasTor = ns.getPlayer().tor;
+      } catch (error) {
+        hasTor = false;
+      }
       
       // Display status
       log(`Money: ${formatMoney(money)} | Home RAM: ${homeRam}GB | Cores: ${cores} | TOR: ${hasTor ? "Yes" : "No"}`, 1);
       
+      // Skip upgrades if we don't have Singularity access
+      if (!hasSingularityAccess) {
+        log("Monitoring only mode - upgrade functions unavailable until SF-4 is obtained", 1);
+        await ns.sleep(30000); // 30 seconds between checks when in monitor mode
+        continue;
+      }
+      
       // Buy TOR router if we don't have it and can afford it
       if (config.buyTorRouter && !hasTor && money > 200000 + reserveMoney) {
-        if (ns.singularity.purchaseTor()) {
+        const result = safeSingularity("purchaseTor");
+        if (result.success && result.result === true) {
           log(`SUCCESS: Purchased TOR router for $200,000`, 0);
           hasTor = true;
           upgradedSomething = true;
           continue; // Continue to next cycle to refresh money
-        } else {
+        } else if (result.success && result.result === false) {
           log(`Failed to purchase TOR router`, 1);
         }
       }
@@ -92,7 +157,8 @@ export async function main(ns) {
         
         for (const program of programs) {
           if (!ns.fileExists(program.name, "home") && money > program.cost + reserveMoney) {
-            if (ns.singularity.purchaseProgram(program.name)) {
+            const result = safeSingularity("purchaseProgram", program.name);
+            if (result.success && result.result === true) {
               log(`SUCCESS: Purchased ${program.name} for ${formatMoney(program.cost)}`, 0);
               upgradedSomething = true;
               break; // Only buy one program per cycle
@@ -107,13 +173,19 @@ export async function main(ns) {
         }
       }
       
-      // Calculate costs
-      const ramUpgradeCost = ns.singularity.getUpgradeHomeRamCost();
-      const coreUpgradeCost = ns.singularity.getUpgradeHomeCoresCost();
+      // Calculate costs using safe functions
+      let ramUpgradeCost = Infinity;
+      let coreUpgradeCost = Infinity;
       
-      // Decide what to upgrade based on priority setting
-      let upgradeRam = false;
-      let upgradeCore = false;
+      const ramCostResult = safeSingularity("getUpgradeHomeRamCost");
+      if (ramCostResult.success) {
+        ramUpgradeCost = ramCostResult.result;
+      }
+      
+      const coreCostResult = safeSingularity("getUpgradeHomeCoresCost");
+      if (coreCostResult.success) {
+        coreUpgradeCost = coreCostResult.result;
+      }
       
       // Check if we've hit the maximum values
       const ramMaxedOut = homeRam >= Math.pow(2, config.maxRamLevel);
@@ -127,19 +199,22 @@ export async function main(ns) {
         continue;
       }
       
-      // Decide what to buy
+      // Decide what to upgrade based on priority setting
+      let upgradeRam = false;
+      let upgradeCore = false;
+      
       if (config.prioritizeRam) {
         // Prioritize RAM upgrades
-        if (!ramMaxedOut && money > ramUpgradeCost + reserveMoney) {
+        if (!ramMaxedOut && money > ramUpgradeCost + reserveMoney && ramUpgradeCost !== Infinity) {
           upgradeRam = true;
-        } else if (!coresMaxedOut && money > coreUpgradeCost + reserveMoney) {
+        } else if (!coresMaxedOut && money > coreUpgradeCost + reserveMoney && coreUpgradeCost !== Infinity) {
           upgradeCore = true;
         }
       } else {
         // Prioritize core upgrades
-        if (!coresMaxedOut && money > coreUpgradeCost + reserveMoney) {
+        if (!coresMaxedOut && money > coreUpgradeCost + reserveMoney && coreUpgradeCost !== Infinity) {
           upgradeCore = true;
-        } else if (!ramMaxedOut && money > ramUpgradeCost + reserveMoney) {
+        } else if (!ramMaxedOut && money > ramUpgradeCost + reserveMoney && ramUpgradeCost !== Infinity) {
           upgradeRam = true;
         }
       }
@@ -147,20 +222,22 @@ export async function main(ns) {
       // Perform the upgrade
       if (upgradeRam) {
         const oldRam = homeRam;
-        if (ns.singularity.upgradeHomeRam()) {
+        const result = safeSingularity("upgradeHomeRam");
+        if (result.success && result.result === true) {
           const newRam = ns.getServerMaxRam("home");
           log(`SUCCESS: Upgraded RAM from ${oldRam}GB to ${newRam}GB for ${formatMoney(ramUpgradeCost)}`, 0);
           upgradedSomething = true;
-        } else {
+        } else if (result.success && result.result === false) {
           log(`ERROR: Failed to upgrade RAM`, 1);
         }
       } else if (upgradeCore) {
         const oldCores = cores;
-        if (ns.singularity.upgradeHomeCores()) {
+        const result = safeSingularity("upgradeHomeCores");
+        if (result.success && result.result === true) {
           const newCores = ns.getServer("home").cpuCores;
           log(`SUCCESS: Upgraded cores from ${oldCores} to ${newCores} for ${formatMoney(coreUpgradeCost)}`, 0);
           upgradedSomething = true;
-        } else {
+        } else if (result.success && result.result === false) {
           log(`ERROR: Failed to upgrade cores`, 1);
         }
       } else {
@@ -169,12 +246,18 @@ export async function main(ns) {
           ramMaxedOut ? Infinity : ramUpgradeCost,
           coresMaxedOut ? Infinity : coreUpgradeCost
         );
-        log(`Need ${formatMoney(nextUpgradeCost)} for next upgrade (have ${formatMoney(money)})`, 1);
-        log(`Waiting to accumulate more money...`, 2);
+        
+        if (nextUpgradeCost !== Infinity) {
+          log(`Need ${formatMoney(nextUpgradeCost)} for next upgrade (have ${formatMoney(money)})`, 1);
+          log(`Waiting to accumulate more money...`, 2);
+        }
       }
       
     } catch (error) {
-      log(`ERROR: ${error}`, 0);
+      // Only log error if not suppressing warnings
+      if (!config.suppressWarnings) {
+        log(`ERROR: ${error}`, 1);
+      }
     }
     
     // Wait before checking again

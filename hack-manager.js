@@ -126,27 +126,48 @@ export async function main(ns) {
   }
 
   function gainRootAccess(target) {
+    // Check for NUKE.exe first
+    if (!ns.fileExists("NUKE.exe", "home")) {
+      log("NUKE.exe not found on home. Cannot gain root access.", "warn");
+      return false;
+    }
+
     let openPorts = 0;
-    for (const program in config.ports) {
+    let toolsAvailable = 0;
+    const portTools = Object.keys(config.ports); // Get tool names
+    
+    log(`Attempting to open ports on ${target}...`, 2); // Verbose log level 2
+    for (const program of portTools) {
         if (ns.fileExists(program, "home")) {
+            toolsAvailable++;
             try {
-                config.ports[program](target);
+                // Call the corresponding function (e.g., ns.brutessh(target))
+                config.ports[program](target); 
                 openPorts++;
-            } catch(e) {/* Ignore errors if port opener fails */} 
+                log(`Used ${program} successfully on ${target}.`, 2);
+            } catch(e) {
+                 log(`Failed to use ${program} on ${target}: ${e}`, 2);
+            } 
+        } else {
+            // log(`Port opener ${program} not found on home.`, 2); // Might be too noisy
         }
     }
+    // Make this summary log visible at normal log level
+    log(`Tools found: ${toolsAvailable}/${portTools.length}. Ports opened: ${openPorts} on ${target}.`, 1); 
 
     try {
       const requiredPorts = ns.getServerNumPortsRequired(target);
       if (openPorts >= requiredPorts) {
+        log(`Sufficient ports opened (${openPorts}/${requiredPorts}). Attempting nuke...`, 2);
         ns.nuke(target);
-        log(`Nuked ${target}! (${openPorts}/${requiredPorts} ports opened)`, "success");
+        log(`Nuked ${target}!`, "success");
         return true;
       } else {
-        // log(`Cannot nuke ${target}. Need ${requiredPorts} ports, have ${openPorts}.`);
+        // Include tool count in the failure message
+        log(`Cannot nuke ${target}. Need ${requiredPorts} ports, have ${openPorts} open (using ${toolsAvailable} tools).`, 1); 
       }
     } catch (e) {
-       // log(`Nuke failed for ${target}: ${e}`);
+       log(`Nuke failed for ${target}: ${e}`, "error");
     }
     return false;
   }

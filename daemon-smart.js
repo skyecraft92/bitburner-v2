@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "1.1.0"; // Version identifier
+export const DAEMON_VERSION = "1.2.0"; // Version identifier - Incremented for new scripts
 
 export async function main(ns) {
   // Get the current game options

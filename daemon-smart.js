@@ -1,5 +1,6 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "1.6.0"; // Version identifier - Added hack manager
+export const DAEMON_VERSION = "1.7.0"; // Version identifier - Added backdoor manager & version alignment
+const CONFIG_FILE = 'daemon-config.txt';
 
 export async function main(ns) {
   // Get the current game options
@@ -124,6 +125,14 @@ export async function main(ns) {
         tail: false,
         args: [],
         sourceFileRequirement: 6  // Explicitly requires SF6
+      },
+      "backdoor-manager.js": {
+        priority: 70, // Run after most other things are established
+        ramRequirement: 6, // Estimate RAM usage
+        sourceFileRequirement: 4, // Needs Singularity (SF4) to function automatically
+        enabled: true,
+        args: [],
+        fallback: null
       }
     }
   };
@@ -439,63 +448,62 @@ export async function main(ns) {
   
   // Download dependencies function
   async function downloadDependencies(ns) {
-    const githubUrl = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/";
-    
-    const dependencies = [
-      // Core Functionality
-      "hacknet-pro.js",
-      "upgrade-home.js", 
-      "stockmaster.js",
-      "hack-manager.js", // Added
-      "buy-servers.js",  // Added
-      // Workers (optional, as manager copies them, but good to have)
-      "hack-worker.js", 
-      "grow-worker.js",
-      "weaken-worker.js",
-      // Late Game
-      "sleeve.js",
-      "bladeburner.js",
-      // Utilities
-      "helpers.js" // Assuming you might have or add this later
+    ns.print("[INFO] Checking and downloading dependencies...");
+    const scriptsToDownload = [
+        "daemon-smart.js", // Download itself too for consistency
+        "helpers.js", 
+        "simple-bootstrap.js", // Bootstrap might need updates
+        "stockmaster.js", 
+        "stock-basic.js", 
+        "hacknet-pro.js", 
+        "hacknet-basic.js", 
+        "upgrade-home.js", 
+        "home-basic.js",
+        "buy-servers.js",
+        "hack-manager.js",
+        "hack-worker.js",
+        "grow-worker.js",
+        "weaken-worker.js",
+        "backdoor-manager.js" // Added new script
+        // Add other core scripts managed by the daemon here
     ];
-    
-    ns.tprint("╔════════════════════════════════════════════╗");
-    ns.tprint("║       DOWNLOADING DEPENDENCIES             ║");
-    ns.tprint("╠════════════════════════════════════════════╣");
-    
-    let successCount = 0;
-    let failCount = 0;
-    
-    for (const file of dependencies) {
-      const url = githubUrl + file;
-      try {
-        ns.tprint(`Downloading ${file}...`);
-        const success = await ns.wget(url, file);
-        
+    // Define source/repo URL (replace with your actual repo URL)
+    const baseUrl = "http://localhost:8000/"; // Or raw GitHub URL etc.
+
+    let allDownloadsSuccessful = true;
+    for (const script of scriptsToDownload) {
+        const remotePath = baseUrl + script;
+        const localPath = script;
+        ns.print(`[INFO] Downloading ${script} from ${remotePath}...`);
+        const success = await ns.wget(remotePath, localPath, "home");
         if (success) {
-          ns.tprint(`✓ Downloaded ${file}`);
-          successCount++;
+            ns.print(`[SUCCESS] Downloaded ${script}.`);
         } else {
-          ns.tprint(`✗ Failed to download ${file}`);
-          failCount++;
+            ns.print(`[ERROR] Failed to download ${script}!`);
+            allDownloadsSuccessful = false;
+            // Decide if failure is critical. Maybe continue for non-essential scripts?
         }
-      } catch (error) {
-        ns.tprint(`✗ Error downloading ${file}: ${error}`);
-        failCount++;
-      }
-      
-      // Small delay between downloads
-      await ns.sleep(300);
+        await ns.sleep(100); // Small delay between downloads
     }
-    
-    ns.tprint("╠════════════════════════════════════════════╣");
-    ns.tprint(`║ ${successCount}/${dependencies.length} files downloaded     ║`);
-    ns.tprint("╚════════════════════════════════════════════╝");
-    
-    if (successCount > 0) {
-      ns.tprint("\nNow run daemon-smart.js without parameters to start the daemon");
-      ns.tprint("Or use --suppress-warnings to hide Source File requirement warnings");
+
+    if (allDownloadsSuccessful) {
+        ns.print("[SUCCESS] All dependencies downloaded.");
+        // Update the local version file upon successful download
+        try {
+            await ns.write('daemon-version.txt', DAEMON_VERSION, 'w');
+            ns.print(`[INFO] Updated local version file to ${DAEMON_VERSION}.`);
+        } catch (e) {
+            ns.print(`[ERROR] Failed to write local version file: ${e}`);
+        }
+        ns.print("[INFO] Restarting daemon with updated dependencies...");
+        // Spawn the newly downloaded daemon (which should be the current script file)
+        // Use spawn to ensure it runs independently and this instance can exit cleanly.
+        ns.spawn("daemon-smart.js", 1); 
+    } else {
+        ns.tprint("[ERROR] Failed to download one or more critical dependencies. Aborting update process.");
     }
+    // This instance should exit after attempting the download/update
+    ns.exit(); 
   }
   
   // Display system status

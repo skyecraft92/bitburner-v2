@@ -345,10 +345,17 @@ export async function main(ns) {
     let totalMaxRam = workerServers.reduce((sum, s) => sum + s.maxRam, 0);
     let actualTotalUsedRam = 0;
     workerServers.forEach(s => actualTotalUsedRam += (s.hostname === 'home' ? ns.getServerUsedRam('home') : ns.getServerUsedRam(s.hostname)));
-    ns.print(`Total Worker RAM: ${(actualTotalUsedRam / 1024).toFixed(1)}TB / ${(totalMaxRam / 1024).toFixed(1)}TB`);
+    // Calculate available RAM more accurately for display
+    let totalAvailableRam = totalMaxRam - actualTotalUsedRam; 
+    ns.print(`Total Worker RAM: ${(actualTotalUsedRam / 1024).toFixed(1)}TB Used / ${(totalMaxRam / 1024).toFixed(1)}TB Max (${(totalAvailableRam / 1024).toFixed(1)}TB Free)`);
     
     ns.print("\n--- Targets ---");
-    managedTargets.sort((a,b) => ns.getServerMaxMoney(b.hostname) - ns.getServerMaxMoney(a.hostname)); // Sort for display
+    managedTargets.sort((a,b) => {
+        // Sort by prep status first (prepping targets first), then by max money
+        if (!a.prepComplete && b.prepComplete) return -1;
+        if (a.prepComplete && !b.prepComplete) return 1;
+        return ns.getServerMaxMoney(b.hostname) - ns.getServerMaxMoney(a.hostname);
+    }); 
     for (const targetInfo of managedTargets) {
         let server = null;
         try { server = ns.getServer(targetInfo.hostname); } catch { continue; }

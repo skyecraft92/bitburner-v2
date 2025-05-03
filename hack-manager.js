@@ -362,13 +362,33 @@ export async function main(ns) {
     ns.clearLog(); // Clear previous log entries
     ns.print("\n--- Hack Manager Status ---");
     ns.print(`Managing ${managedTargets.length}/${config.targetCount} targets. Cycle: ${config.cycleTime/1000}s`);
-    ns.print(`Worker Servers: ${workerServers.filter(s => s.hostname !== 'home').length} purchased + home`);
-    let totalMaxRam = workerServers.reduce((sum, s) => sum + s.maxRam, 0);
-    let actualTotalUsedRam = 0;
-    workerServers.forEach(s => actualTotalUsedRam += (s.hostname === 'home' ? ns.getServerUsedRam('home') : ns.getServerUsedRam(s.hostname)));
-    // Calculate available RAM more accurately for display
-    let totalAvailableRam = totalMaxRam - actualTotalUsedRam; 
-    ns.print(`Total Worker RAM: ${(actualTotalUsedRam / 1024).toFixed(1)}TB Used / ${(totalMaxRam / 1024).toFixed(1)}TB Max (${(totalAvailableRam / 1024).toFixed(1)}TB Free)`);
+    const purchasedServers = workerServers.filter(s => s.hostname !== 'home');
+    const homeWorkerEntry = workerServers.find(s => s.hostname === 'home');
+    ns.print(`Worker Servers: ${purchasedServers.length} purchased + ${homeWorkerEntry ? 'home' : 'home (not used)'}`);
+
+    // Calculate True Total Max RAM
+    let trueTotalMaxRam = purchasedServers.reduce((sum, s) => sum + ns.getServerMaxRam(s.hostname), 0); // Max RAM from purchased
+    if (homeWorkerEntry) { 
+        trueTotalMaxRam += ns.getServerMaxRam('home'); // Add home's actual max RAM
+    }
+
+    // Calculate Actual Used RAM
+    let actualTotalUsedRam = purchasedServers.reduce((sum, s) => sum + ns.getServerUsedRam(s.hostname), 0); // Used RAM on purchased
+    let homeUsedRam = 0;
+    if (homeWorkerEntry) { 
+        homeUsedRam = ns.getServerUsedRam('home');
+        actualTotalUsedRam += homeUsedRam; // Add home's used RAM
+    }
+
+    // Calculate True Free RAM
+    let trueTotalFreeRam = trueTotalMaxRam - actualTotalUsedRam;
+    // Also consider home reserve for a more accurate 'hackable free' RAM count
+    let freeRamForHacking = purchasedServers.reduce((sum, s) => sum + (ns.getServerMaxRam(s.hostname) - ns.getServerUsedRam(s.hostname)), 0);
+    if (homeWorkerEntry) {
+         freeRamForHacking += Math.max(0, ns.getServerMaxRam('home') - ns.getServerUsedRam('home') - config.reserveHomeRam);
+    }
+
+    ns.print(`Total Worker RAM: ${(actualTotalUsedRam / 1024).toFixed(1)}TB Used / ${(trueTotalMaxRam / 1024).toFixed(1)}TB Max | Available for Hacking: ${(freeRamForHacking / 1024).toFixed(1)}TB`);
     
     ns.print("\n--- Targets ---");
     managedTargets.sort((a,b) => {

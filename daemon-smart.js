@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "1.4.0"; // Version identifier - Added hack manager
+export const DAEMON_VERSION = "1.5.0"; // Version identifier - Added hack manager
 
 export async function main(ns) {
   // Get the current game options

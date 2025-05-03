@@ -1,17 +1,19 @@
 /** @param {NS} ns */
 export async function main(ns) {
-  // Simple script to download the daemon and run it with warnings suppressed
-  const daemonUrl = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/daemon-smart.js";
+  const REMOTE_DAEMON_URL = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/daemon-smart.js";
+  const LOCAL_DAEMON_FILE = "daemon-smart.js";
+  const LOCAL_VERSION_FILE = "daemon-version.txt";
+  const REMOTE_VERSION_REGEX = /export const DAEMON_VERSION = "([^\"]+)";/; // Regex to find version
   
-  // List of required files and their fallbacks
+  // List of required files and their fallbacks (primary file first)
   const requiredFiles = [
-    "daemon-smart.js",
+    LOCAL_DAEMON_FILE, // Ensure daemon is listed first
     "hacknet-pro.js",
     "upgrade-home.js",
     "stockmaster.js"
   ];
   
-  // Fallback scripts to create locally if download fails
+  // Fallback scripts to create locally if download fails or main script can't run
   const fallbackScripts = {
     "hacknet-pro.js": "hacknet-basic.js",
     "upgrade-home.js": "home-basic.js",
@@ -19,133 +21,260 @@ export async function main(ns) {
   };
   
   ns.tprint("╔════════════════════════════════════════════╗");
-  ns.tprint("║      BITBURNER BOOTSTRAP UTILITY           ║");
+  ns.tprint("║      BITBURNER BOOTSTRAP UTILITY v1.1      ║"); // Bumped bootstrap version
   ns.tprint("╠════════════════════════════════════════════╣");
   
-  // Create fallback scripts first so they're available if needed
-  ns.tprint("Creating fallback scripts...");
-  await createFallbackScripts(ns);
+  // Create fallback script content first (doesn't write files yet)
+  ns.tprint("Preparing fallback scripts definitions...");
+  const fallbackContent = createFallbackScriptsDefinitions(ns); // Renamed function
   
-  // Download the daemon script
-  try {
-    ns.tprint("Step 1: Downloading daemon-smart.js...");
-    const success = await ns.wget(daemonUrl, "daemon-smart.js");
-    if (success) {
-      ns.tprint("✓ Downloaded daemon-smart.js");
-      
-      // Now download dependencies
-      ns.tprint("\nStep 2: Downloading dependencies...");
-      const depPid = ns.run("daemon-smart.js", 1, "--download-deps");
-      if (depPid > 0) {
-        ns.tprint("Dependencies are being downloaded...");
-        
-        // Wait for the download process to complete
-        while (ns.isRunning(depPid)) {
-          await ns.sleep(1000);
-        }
-        
-        // Verify the files exist
-        ns.tprint("\nStep 3: Verifying downloaded files...");
-        let missingFiles = [];
-        for (const file of requiredFiles) {
-          if (!ns.fileExists(file)) {
-            missingFiles.push(file);
-            ns.tprint(`✗ Missing file: ${file}`);
-          } else {
-            ns.tprint(`✓ Found file: ${file}`);
+  // --- Version Check --- 
+  ns.tprint("\nStep 1: Checking for updates...");
+  const localVersion = await getLocalVersion(ns);
+  const remoteVersionResult = await getRemoteVersion(ns); 
+  const remoteVersion = remoteVersionResult.version;
+
+  ns.tprint(` -> Local version: ${localVersion || 'Not found'}`);
+  ns.tprint(` -> Remote version: ${remoteVersion || 'Could not fetch'}`);
+
+  let needsUpdate = false;
+  if (!remoteVersion) {
+      ns.tprint("⚠️ Could not fetch remote version. Will use local if available.");
+  } else {
+      needsUpdate = (!localVersion || localVersion !== remoteVersion);
+  }
+
+  let daemonDownloaded = false;
+  let dependenciesDownloaded = false;
+  let initialDownloadFailed = false;
+
+  if (needsUpdate && remoteVersion) {
+    ns.tprint(`Updating daemon from ${localVersion || 'none'} to ${remoteVersion}...`);
+    try {
+      const downloadSuccess = await ns.wget(REMOTE_DAEMON_URL, LOCAL_DAEMON_FILE);
+      if (downloadSuccess) {
+        ns.tprint(`✓ Downloaded ${LOCAL_DAEMON_FILE}`);
+        await saveLocalVersion(ns, remoteVersion);
+        daemonDownloaded = true;
+
+        // Trigger dependency download after updating daemon
+        ns.tprint("\nStep 2: Downloading dependencies for new version...");
+        const depPid = ns.run(LOCAL_DAEMON_FILE, 1, "--download-deps");
+        if (depPid > 0) {
+          ns.tprint(" -> Dependency download process started...");
+          while (ns.isRunning(depPid)) {
+            await ns.sleep(1000);
           }
-        }
-        
-        if (missingFiles.length > 0) {
-          ns.tprint("\n⚠️ Warning: Some required files are missing!");
-          ns.tprint("Attempting manual download of missing files...");
-          
-          // Try to download missing files directly
-          for (const file of missingFiles) {
-            const fileUrl = `https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/${file}`;
-            ns.tprint(`Downloading ${file}...`);
-            const fileSuccess = await ns.wget(fileUrl, file);
-            
-            if (fileSuccess) {
-              ns.tprint(`✓ Downloaded ${file}`);
-            } else {
-              ns.tprint(`✗ Failed to download ${file}`);
-              
-              // If we have a fallback for this file, use it
-              if (fallbackScripts[file]) {
-                const fallbackFile = fallbackScripts[file];
-                if (ns.fileExists(fallbackFile)) {
-                  // Copy the fallback to the expected location
-                  await ns.write(file, ns.read(fallbackFile), "w");
-                  ns.tprint(`✓ Using fallback: ${fallbackFile} → ${file}`);
-                }
-              }
-            }
-          }
-        }
-        
-        // Verify core files exist before starting daemon
-        if (ns.fileExists("daemon-smart.js")) {
-          // Now run the daemon with suppressed warnings
-          ns.tprint("\nStep 4: Starting daemon with warnings suppressed...");
-          const daemonPid = ns.run("daemon-smart.js", 1, "--suppress-warnings");
-          if (daemonPid > 0) {
-            ns.tprint("✓ Daemon started successfully with warnings suppressed!");
-          } else {
-            ns.tprint("✗ Failed to start the daemon - not enough RAM?");
-            ns.tprint("Try running it manually with: run daemon-smart.js --suppress-warnings");
-            
-            // If we can't start the daemon, try to at least start the basic scripts
-            ns.tprint("\nTrying to start essential services directly...");
-            
-            if (ns.fileExists("hacknet-pro.js") || ns.fileExists("hacknet-basic.js")) {
-              const hacknetScript = ns.fileExists("hacknet-pro.js") ? "hacknet-pro.js" : "hacknet-basic.js";
-              if (ns.run(hacknetScript, 1) > 0) {
-                ns.tprint(`✓ Started ${hacknetScript}`);
-              } else {
-                ns.tprint(`✗ Failed to start ${hacknetScript} - not enough RAM?`);
-              }
-            }
-            
-            if (ns.fileExists("upgrade-home.js") || ns.fileExists("home-basic.js")) {
-              const homeScript = ns.fileExists("upgrade-home.js") ? "upgrade-home.js" : "home-basic.js";
-              if (ns.run(homeScript, 1, "--suppress-warnings") > 0) {
-                ns.tprint(`✓ Started ${homeScript}`);
-              } else {
-                ns.tprint(`✗ Failed to start ${homeScript} - not enough RAM?`);
-              }
-            }
-            
-            if (ns.fileExists("stockmaster.js") || ns.fileExists("stock-basic.js")) {
-              const stockScript = ns.fileExists("stockmaster.js") ? "stockmaster.js" : "stock-basic.js";
-              if (ns.run(stockScript, 1) > 0) {
-                ns.tprint(`✓ Started ${stockScript}`);
-              } else {
-                ns.tprint(`✗ Failed to start ${stockScript} - not enough RAM?`);
-              }
-            }
-          }
+          ns.tprint("✓ Dependency download process finished.");
+          dependenciesDownloaded = true;
         } else {
-          ns.tprint("\n✗ Critical files are missing. Cannot start daemon.");
-          ns.tprint("Please check your connection and try again.");
+          ns.tprint("✗ Failed to start dependency download - not enough RAM?");
+          ns.tprint("   Run manually: run daemon-smart.js --download-deps");
         }
       } else {
-        ns.tprint("✗ Failed to download dependencies - not enough RAM?");
-        ns.tprint("Try running: run daemon-smart.js --download-deps");
+        ns.tprint(`✗ Failed to download ${LOCAL_DAEMON_FILE}. Will try to use local version if available.`);
+        initialDownloadFailed = true;
       }
-    } else {
-      ns.tprint("✗ Failed to download daemon-smart.js");
-      ns.tprint("Check your internet connection and try again.");
+    } catch (error) {
+        ns.tprint(`✗ Error during daemon download: ${error}`);
+        initialDownloadFailed = true;
     }
-  } catch (error) {
-    ns.tprint(`✗ Error during bootstrap: ${error}`);
+  } else if (localVersion) {
+      ns.tprint(`✓ Daemon is up-to-date (Version: ${localVersion})`);
+  } else {
+      // No local version, and couldn't fetch remote version - try downloading anyway
+      ns.tprint("No local version found. Attempting initial download...");
+      try {
+          const downloadSuccess = await ns.wget(REMOTE_DAEMON_URL, LOCAL_DAEMON_FILE);
+          if (downloadSuccess) {
+              ns.tprint(`✓ Downloaded ${LOCAL_DAEMON_FILE} (version unknown)`);
+              // We don't know the version, so can't save it
+              daemonDownloaded = true;
+              // Attempt dependency download
+              ns.tprint("\nStep 2: Downloading dependencies...");
+              const depPid = ns.run(LOCAL_DAEMON_FILE, 1, "--download-deps");
+              if (depPid > 0) { /* ... wait ... */ while (ns.isRunning(depPid)) await ns.sleep(1000); dependenciesDownloaded = true; } 
+              else ns.tprint("✗ Failed to start dependency download.");
+          } else {
+              ns.tprint(`✗ Failed to download ${LOCAL_DAEMON_FILE}.`);
+              initialDownloadFailed = true;
+          }
+      } catch (error) {
+          ns.tprint(`✗ Error during initial download: ${error}`);
+          initialDownloadFailed = true;
+      }
   }
+
+  // --- Verification and Fallback Handling --- 
+  ns.tprint("\nStep 3: Verifying required files...");
+  
+  // First, ensure daemon exists if we didn't just download it or if download failed
+  if (!ns.fileExists(LOCAL_DAEMON_FILE)) {
+       ns.tprint(`✗ CRITICAL: ${LOCAL_DAEMON_FILE} is missing and download failed. Cannot continue.`);
+       // Try to write a basic version file as last resort? No, too complex.
+       return; 
+  }
+  
+  let missingFiles = [];
+  for (const file of requiredFiles) {
+      if (!ns.fileExists(file)) {
+          missingFiles.push(file);
+          ns.tprint(`✗ Missing file: ${file}`);
+      } else {
+          ns.tprint(`✓ Found file: ${file}`);
+      }
+  }
+
+  if (missingFiles.length > 0) {
+      ns.tprint("\n⚠️ Some required files are missing!");
+      // Only try manual download if dependency download didn't run or failed
+      if (!dependenciesDownloaded) {
+          ns.tprint("Attempting manual download of missing files...");
+          for (const file of missingFiles) {
+              if (file === LOCAL_DAEMON_FILE) continue; // Already handled daemon download
+              const fileUrl = `https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/${file}`;
+              ns.tprint(`Downloading ${file}...`);
+              const fileSuccess = await ns.wget(fileUrl, file);
+              if (fileSuccess) {
+                  ns.tprint(`✓ Downloaded ${file}`);
+                  // Remove from missing list if successful
+                  missingFiles = missingFiles.filter(f => f !== file);
+              } else {
+                  ns.tprint(`✗ Failed to download ${file}`);
+              }
+          }
+      } else {
+          ns.tprint("Dependency download ran, assuming files should exist or have fallbacks.");
+      }
+
+      // Apply fallbacks for any *still* missing files
+      if (missingFiles.length > 0) {
+          ns.tprint("\nApplying fallbacks for remaining missing files...");
+          for (const missingFile of missingFiles) {
+              if (fallbackScripts[missingFile]) {
+                  const fallbackName = fallbackScripts[missingFile];
+                  if (fallbackContent[fallbackName]) { // Check if fallback content exists
+                      try {
+                          ns.tprint(`Writing fallback: ${fallbackName} -> ${missingFile}`);
+                          await ns.write(missingFile, fallbackContent[fallbackName], "w");
+                          ns.tprint(`✓ Applied fallback for ${missingFile}`);
+                          // Check if the file exists now
+                           if (!ns.fileExists(missingFile)) {
+                               ns.tprint(`✗ ERROR: Failed to write fallback file ${missingFile}`);
+                           } else {
+                              // If fallback was applied, remove from missing list
+                              missingFiles = missingFiles.filter(f => f !== missingFile);
+                           }
+                      } catch (error) {
+                           ns.tprint(`✗ ERROR writing fallback for ${missingFile}: ${error}`);
+                      }
+                  } else {
+                      ns.tprint(`✗ Fallback content definition missing for ${fallbackName}`);
+                  }
+              } else {
+                  ns.tprint(`- No fallback defined for ${missingFile}`);
+              }
+          }
+      }
+  }
+
+  // Final check for essential daemon file
+  if (!ns.fileExists(LOCAL_DAEMON_FILE)) {
+      ns.tprint("\n✗ CRITICAL: Daemon file is still missing after all attempts. Exiting.");
+      return;
+  }
+
+  // --- Start Daemon --- 
+  ns.tprint("\nStep 4: Starting daemon...");
+  // Run with suppressed warnings if daemon handles them (check daemon version?)
+  // For now, assume modern daemon handles suppression via its own config
+  const daemonPid = ns.run(LOCAL_DAEMON_FILE, 1); 
+  if (daemonPid > 0) {
+      ns.tprint(`✓ Daemon started successfully (PID: ${daemonPid})!`);
+  } else {
+      ns.tprint("✗ Failed to start the daemon - likely not enough RAM.");
+      ns.tprint("   Try running manually: run daemon-smart.js");
+      
+      // If daemon fails, try to start essential *fallback* services directly
+      ns.tprint("\nAttempting to start essential fallback services...");
+      for (const primaryScript in fallbackScripts) {
+          const fallbackScript = fallbackScripts[primaryScript];
+          if (ns.fileExists(fallbackScript)) {
+              const scriptRam = ns.getScriptRam(fallbackScript);
+              if (ns.getServerMaxRam('home') - ns.getServerUsedRam('home') >= scriptRam) {
+                   if (ns.run(fallbackScript, 1) > 0) {
+                       ns.tprint(`✓ Started fallback ${fallbackScript}`);
+                   } else {
+                       ns.tprint(`✗ Failed to start fallback ${fallbackScript} (RAM: ${scriptRam}GB)`);
+                   }
+              } else {
+                    ns.tprint(`✗ Not enough RAM for fallback ${fallbackScript} (needs ${scriptRam}GB)`);
+              }
+          } else {
+               ns.tprint(`- Fallback script ${fallbackScript} not found.`);
+          }
+           await ns.sleep(200); // Small delay between starts
+      }
+  }
+  ns.tprint("\nBootstrap finished.");
 }
 
-// Function to create fallback scripts
-async function createFallbackScripts(ns) {
-  // Basic hacknet manager script
-  const hacknetBasic = `/** @param {NS} ns */
+// --- Helper Functions ---
+
+async function getLocalVersion(ns) {
+    const versionFile = "daemon-version.txt";
+    if (ns.fileExists(versionFile)) {
+        try {
+            return ns.read(versionFile).trim();
+        } catch (e) {
+            ns.tprint(`Error reading local version file: ${e}`);
+            return null;
+        }
+    } 
+    return null;
+}
+
+async function saveLocalVersion(ns, version) {
+    const versionFile = "daemon-version.txt";
+    try {
+        await ns.write(versionFile, version, "w");
+    } catch (e) {
+        ns.tprint(`Error writing local version file: ${e}`);
+    }
+}
+
+async function getRemoteVersion(ns) {
+    const url = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/daemon-smart.js";
+    const regex = /export const DAEMON_VERSION = "([^\"]+)";/;
+    let content = null;
+    try {
+        // Use wget to fetch content into a variable - create a unique filename
+        const tempFile = `/temp/remote-daemon-${Date.now()}.js.txt`; 
+        const success = await ns.wget(url, tempFile);
+        if (success) {
+            content = ns.read(tempFile);
+            ns.rm(tempFile); // Clean up temporary file
+            if (content) {
+                const match = regex.exec(content);
+                if (match && match[1]) {
+                    return { version: match[1], content: content }; // Return version and content
+                }
+            }
+        } else {
+             ns.tprint(`wget failed for remote version check from ${url}`);
+        }
+    } catch (e) {
+        ns.tprint(`Error fetching/reading remote version: ${e}`);
+    }
+    return { version: null, content: null }; // Return nulls if fetching/parsing fails
+}
+
+// Function to define fallback scripts content (DOES NOT WRITE FILES)
+function createFallbackScriptsDefinitions(ns) {
+    const definitions = {};
+
+    // Basic hacknet manager script
+    definitions["hacknet-basic.js"] = `/** @param {NS} ns */
 export async function main(ns) {
   // Basic hacknet manager - fallback for when hacknet-pro.js is unavailable
   const config = {
@@ -286,8 +415,8 @@ export async function main(ns) {
   }
 }`;
 
-  // Basic home upgrader script
-  const homeBasic = `/** @param {NS} ns */
+    // Basic home upgrader script
+    definitions["home-basic.js"] = `/** @param {NS} ns */
 export async function main(ns) {
   // Basic home computer upgrade script - fallback for upgrade-home.js
   const config = {
@@ -368,8 +497,8 @@ export async function main(ns) {
   }
 }`;
 
-  // Basic stock monitor script
-  const stockBasic = `/** @param {NS} ns */
+    // Basic stock monitor script
+    definitions["stock-basic.js"] = `/** @param {NS} ns */
 export async function main(ns) {
   // Basic stock market script - fallback for stockmaster.js
   // This provides read-only functionality without TIX API
@@ -509,8 +638,8 @@ export async function main(ns) {
   }
 }`;
 
-  // Write the fallback scripts
-  await ns.write("hacknet-basic.js", hacknetBasic, "w");
-  await ns.write("home-basic.js", homeBasic, "w");
-  await ns.write("stock-basic.js", stockBasic, "w");
-} 
+    return definitions;
+}
+
+// Ensure the old function name isn't called accidentally if script is run mid-edit
+// async function createFallbackScripts(ns) { /* ... old code ... */ } 

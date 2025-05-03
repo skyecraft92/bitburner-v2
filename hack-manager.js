@@ -63,12 +63,11 @@ export async function main(ns) {
   function updateWorkerServers() {
     workerServers = ns.getPurchasedServers().map(s => ({ hostname: s, maxRam: ns.getServerMaxRam(s), usedRam: ns.getServerUsedRam(s) }));
     if (config.useHomeServer) {
-      const homeRam = ns.getServerMaxRam("home");
-      const homeUsed = ns.getServerUsedRam("home");
-      const homeAvailable = Math.max(0, homeRam - homeUsed - config.reserveHomeRam);
-      if (homeAvailable > 0) {
-         // Treat available home RAM as a worker server
-         workerServers.push({ hostname: "home", maxRam: homeAvailable, usedRam: 0}); 
+      const homeMaxRam = ns.getServerMaxRam("home");
+      // Only add home if it has more RAM than the reserve
+      if (homeMaxRam > config.reserveHomeRam) { 
+         // Store actual max and used RAM for home
+         workerServers.push({ hostname: "home", maxRam: homeMaxRam, usedRam: ns.getServerUsedRam("home")}); 
       }
     }
     // log(`Found ${workerServers.length} worker servers.`);
@@ -205,17 +204,30 @@ export async function main(ns) {
   }
 
   async function assignWorkersToTargets() {
-    let totalAvailableRam = workerServers.reduce((sum, s) => sum + s.maxRam - s.usedRam, 0);
+    // Recalculate total available RAM accurately each time, considering home reserve
+    let totalAvailableRam = 0;
+    workerServers.forEach(s => {
+        const currentUsedRam = ns.getServerUsedRam(s.hostname); // Get fresh used RAM
+        s.usedRam = currentUsedRam; // Update state for sorting later
+        let available = 0;
+        if (s.hostname === 'home') {
+            available = Math.max(0, s.maxRam - currentUsedRam - config.reserveHomeRam);
+        } else {
+            available = s.maxRam - currentUsedRam;
+        }
+        totalAvailableRam += available;
+    });
+
     if (totalAvailableRam <= 0) {
-        log("No worker RAM available.", "warn");
+        // log("No worker RAM available.", "warn"); // Keep this less noisy maybe
         return;
     }
 
-    // Reset assigned RAM for targets & update worker server used RAM accurately
+    // Reset assigned RAM for targets
     managedTargets.forEach(t => t.assignedRam = 0);
-    workerServers.forEach(s => s.usedRam = (s.hostname === 'home' ? Math.max(0, ns.getServerMaxRam('home') - config.reserveHomeRam) - s.maxRam : ns.getServerUsedRam(s.hostname)) ); // Correctly get used RAM
-    totalAvailableRam = workerServers.reduce((sum, s) => sum + s.maxRam - s.usedRam, 0); // Recalculate available
     let ramAllocatedThisCycle = 0;
+    // Temporary detailed logging
+    // log(`Starting allocation cycle. Total Available RAM: ${totalAvailableRam.toFixed(1)}GB`);
 
     for (const targetInfo of managedTargets) {
       const target = targetInfo.hostname;
@@ -228,7 +240,7 @@ export async function main(ns) {
       const minSec = server.minDifficulty;
 
       const needsWeaken = secLevel > minSec + config.securityThresholdPadding;
-      const needsGrow = moneyAvail < moneyMax * 0.9; // Grow if below 90% max money
+      const needsGrow = moneyAvail < moneyMax * 0.95; // Grow if below 95% (slightly more aggressive)
       
       targetInfo.prepComplete = !needsWeaken && !needsGrow;
 
@@ -240,85 +252,94 @@ export async function main(ns) {
           "grow-worker.js": ns.getScriptRam("grow-worker.js"),
           "hack-worker.js": ns.getScriptRam("hack-worker.js")
       };
-
+      
       // Determine required action: Weaken > Grow > Hack
       if (needsWeaken) {
         action = "weaken-worker.js";
-        // Calculate weaken threads needed based on security difference
         const securityDeficit = secLevel - minSec;
-        // ns.weakenAnalyze(1) returns how much security 1 thread reduces
         threads = Math.max(1, Math.ceil(securityDeficit / ns.weakenAnalyze(1))); 
         requiredRam = scriptRamMap[action] * threads;
       } else if (needsGrow) {
         action = "grow-worker.js";
-        // Calculate grow threads needed to reach max money
-        const growMultiplier = Math.max(1.01, moneyMax / Math.max(moneyAvail, 1)); // Ensure > 1, target max money
+        const growMultiplier = Math.max(1.01, moneyMax / Math.max(moneyAvail, 1)); 
         try { 
             threads = Math.max(1, Math.ceil(ns.growthAnalyze(target, growMultiplier)));
-        } catch (e) { threads = 1; /* Avoid errors on 0 money servers */ }
+        } catch (e) { threads = 1; }
         requiredRam = scriptRamMap[action] * threads;
       } else { // Ready to hack
         action = "hack-worker.js";
-        // Calculate hack threads needed to take configured percentage
         const hackAmount = moneyMax * config.moneyPercentToHack;
          try {
             threads = Math.max(1, Math.floor(ns.hackAnalyzeThreads(target, hackAmount)));
-         } catch (e) { threads = 1; /* Avoid errors */ }
+         } catch (e) { threads = 1; }
         requiredRam = scriptRamMap[action] * threads;
       }
       
-      if (threads <= 0) {
-          // log(`Calculated 0 threads for ${action} on ${target}. Skipping.`);
+      if (threads <= 0 || requiredRam <= 0) {
+          log(`Calculated 0 threads or RAM for ${action} on ${target}. Skipping.`); // More explicit log
           continue;
       }
 
-      // Allocate RAM from the total pool for this target
-      // Prioritize prep tasks (Weaken/Grow) 
-      let ramShare = 0;
-      if (action === "hack-worker.js") {
-          ramShare = totalAvailableRam * (1 - config.prepFocusFactor); // Allocate smaller share for hacking
-      } else { 
-          ramShare = totalAvailableRam * config.prepFocusFactor; // Allocate larger share for prep
-          // Distribute prep RAM somewhat evenly among prepping targets?
-          const preppingTargets = managedTargets.filter(t => !t.prepComplete).length || 1;
-          ramShare /= preppingTargets; // Divide prep RAM share among prepping targets
-      }
-      
-      const ramToAllocate = Math.min(requiredRam, ramShare, totalAvailableRam - ramAllocatedThisCycle); // Limit by needed, share, and remaining total
-      const threadsToRun = Math.floor(ramToAllocate / scriptRamMap[action]);
+      // Determine RAM to allocate for this specific action/target
+      const remainingRamInPool = totalAvailableRam - ramAllocatedThisCycle;
+      if (remainingRamInPool <= 0) continue; // No more RAM left in the pool for this cycle
 
-      if (threadsToRun > 0) {
+      // Conceptual allocation based on focus factor - how much of the *remaining pool* are we willing to give?
+      let poolShareLimit = remainingRamInPool; // Default: use whatever is left
+      if (action === "hack-worker.js") {
+          // Limit hacking allocation if prepping is still needed elsewhere (use less of the pool)
+          const isAnyTargetPrepping = managedTargets.some(t => !t.prepComplete);
+          if (isAnyTargetPrepping) {
+             poolShareLimit = remainingRamInPool * (1 - config.prepFocusFactor); 
+          }
+      } else {
+          // For prep tasks, allow using a larger portion of the remaining pool
+           poolShareLimit = remainingRamInPool * config.prepFocusFactor; 
+          // Optional: Could further divide poolShareLimit by remaining prepping targets if desired
+          // const remainingPreppingTargets = managedTargets.filter(t => !t.prepComplete && t.assignedRam === 0).length || 1;
+          // poolShareLimit /= remainingPreppingTargets;
+      }
+
+      // Allocate the minimum of: required RAM, the calculated share limit, and what's actually left
+      const ramToAllocate = Math.min(requiredRam, poolShareLimit, remainingRamInPool);
+      const threadsToRun = Math.floor(ramToAllocate / scriptRamMap[action]);
+      
+      // Temporary detailed logging
+      // log(`Target: ${target} | Action: ${action} | Needs: ${requiredRam.toFixed(1)}GB (${threads} threads) | PoolShare: ${poolShareLimit.toFixed(1)}GB | Allocating: ${ramToAllocate.toFixed(1)}GB (${threadsToRun} threads) | Pool Remaining: ${remainingRamInPool.toFixed(1)}GB`);
+
+      if (threadsToRun > 0 && ramToAllocate > 0) {
         targetInfo.assignedRam = ramToAllocate; // Track RAM assigned to this target
         ramAllocatedThisCycle += ramToAllocate; // Decrease overall available RAM for this cycle
-        // log(`Allocating ${threadsToRun} threads (${ramToAllocate.toFixed(1)}GB RAM) for ${action} on ${target}`);
+        // log(`ALLOCATING ${threadsToRun} threads (${ramToAllocate.toFixed(1)}GB RAM) for ${action} on ${target}`);
         
         // Distribute and execute workers
         await distributeAndRun(action, threadsToRun, target);
       } else {
-        // log(`Not enough RAM to allocate any threads for ${action} on ${target}`);
+        // log(`Could not run threads for ${action} on ${target}. RAM Need: ${requiredRam.toFixed(1)}GB, Pool Share Limit: ${poolShareLimit.toFixed(1)}GB, Pool Remaining: ${remainingRamInPool.toFixed(1)}GB, Calculated Threads: ${threadsToRun}`);
       }
     }
+     // log(`Finished allocation cycle. Total RAM allocated: ${ramAllocatedThisCycle.toFixed(1)}GB`);
   }
 
   async function distributeAndRun(script, totalThreads, target) {
     let threadsRemaining = totalThreads;
     const scriptRamCost = ns.getScriptRam(script);
 
-    // Sort workers by available RAM (largest first) to fill big servers first
-    workerServers.sort((a,b) => (b.maxRam - b.usedRam) - (a.maxRam - a.usedRam));
+    // Sort workers by available RAM (largest first) - recalculate available RAM accurately here
+    workerServers.forEach(s => {
+        const currentUsedRam = ns.getServerUsedRam(s.hostname); // Fresh RAM usage
+        if (s.hostname === 'home') {
+            s.availableRam = Math.max(0, s.maxRam - currentUsedRam - config.reserveHomeRam);
+        } else {
+            s.availableRam = s.maxRam - currentUsedRam;
+        }
+    });
+    workerServers.sort((a, b) => b.availableRam - a.availableRam);
 
     for (const server of workerServers) {
         if (threadsRemaining <= 0) break;
 
-        // Calculate *true* available RAM on this server for this allocation pass
-        let currentUsedRam = 0;
-        if (server.hostname === 'home') {
-            // For home, 'maxRam' is already the calculated available space, 'usedRam' starts at 0 for this cycle
-            currentUsedRam = server.usedRam; 
-        } else {
-             currentUsedRam = ns.getServerUsedRam(server.hostname);
-        }
-        const availableRamOnServer = server.maxRam - currentUsedRam;
+        const availableRamOnServer = server.availableRam; // Use the pre-calculated available RAM for sorting
 
         if (availableRamOnServer < scriptRamCost) continue; // Skip if can't run even 1 thread
         
@@ -328,33 +349,34 @@ export async function main(ns) {
         if (threadsToRun <= 0) continue;
         
         // Ensure worker scripts are present (only copy if needed)
-        for(const workerScript of config.workerScripts) {
-            if (!ns.fileExists(workerScript, server.hostname)) {
-                if (server.hostname === 'home') continue; // Don't scp to home from home
-                const scpSuccess = await ns.scp(workerScript, server.hostname, "home");
-                if (!scpSuccess) {
-                   log(`Failed to scp ${workerScript} to ${server.hostname}`, "error");
-                   continue; // Skip this server if scp failed
+        // This check can be moved outside the loop if scripts are guaranteed copied once
+        let scriptsCopied = true; 
+        if (server.hostname !== 'home') { // Don't scp to home from home
+             for(const workerScript of config.workerScripts) {
+                if (!ns.fileExists(workerScript, server.hostname)) {
+                    const scpSuccess = await ns.scp(workerScript, server.hostname, "home");
+                    if (!scpSuccess) {
+                       log(`Failed to scp ${workerScript} to ${server.hostname}`, "error");
+                       scriptsCopied = false;
+                       break; // Stop trying to copy other scripts if one fails
+                    }
                 }
             }
         }
+        
+        if (!scriptsCopied) continue; // Skip this server if scp failed
 
         // Execute script
         const pid = ns.exec(script, server.hostname, threadsToRun, target);
         if (pid > 0) {
-           // log(`Launched ${script} on ${server.hostname} with ${threadsToRun} threads for target ${target}.`);
-           // Update the temporary usedRam state for *this cycle's allocation* on home server
-           if (server.hostname === 'home') { 
-               server.usedRam += threadsToRun * scriptRamCost; 
-           }
+           // log(`Launched ${script} on ${server.hostname} (${threadsToRun} threads) for ${target}.`);
            threadsRemaining -= threadsToRun;
+           // Update availableRam *immediately* for the next iteration within this function
+           server.availableRam -= threadsToRun * scriptRamCost; 
+           // No need to update server.usedRam here as ns.getServerUsedRam will fetch it next cycle
         } else {
-           log(`Failed to exec ${script} on ${server.hostname} with ${threadsToRun} threads for ${target}. RAM issue?`, "warn");
+           log(`Failed to exec ${script} on ${server.hostname} (${threadsToRun} threads/${(threadsToRun*scriptRamCost).toFixed(1)}GB) for ${target}. RAM Available: ${availableRamOnServer.toFixed(1)}GB`, "warn");
         }
-    }
-
-    if (threadsRemaining > 0) {
-        log(`Could not allocate all required threads for ${script} on ${target}. ${threadsRemaining} remaining.`, "warn");
     }
   }
   

@@ -442,12 +442,21 @@ export async function main(ns) {
     const githubUrl = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/";
     
     const dependencies = [
+      // Core Functionality
       "hacknet-pro.js",
       "upgrade-home.js", 
       "stockmaster.js",
+      "hack-manager.js", // Added
+      "buy-servers.js",  // Added
+      // Workers (optional, as manager copies them, but good to have)
+      "hack-worker.js", 
+      "grow-worker.js",
+      "weaken-worker.js",
+      // Late Game
       "sleeve.js",
       "bladeburner.js",
-      "helpers.js"
+      // Utilities
+      "helpers.js" // Assuming you might have or add this later
     ];
     
     ns.tprint("╔════════════════════════════════════════════╗");

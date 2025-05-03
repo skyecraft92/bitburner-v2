@@ -248,30 +248,43 @@ async function saveLocalVersion(ns, version) {
 async function getRemoteVersion(ns) {
     const url = "https://raw.githubusercontent.com/skyecraft92/bitburner-v2/main/daemon-smart.js";
     const regex = /export const DAEMON_VERSION = "([^\"]+)";/;
+    const tempFile = "_remote_daemon_check.js"; // Temporary file
+    let version = null;
     let content = null;
+
     try {
-        // Use wget to fetch content into a variable - create a unique filename
-        const tempFile = `/temp/remote-daemon-${Date.now()}.js.txt`; 
         const success = await ns.wget(url, tempFile);
         if (success) {
             content = ns.read(tempFile);
-            ns.rm(tempFile); // Clean up temporary file
-            if (content) {
-                const match = regex.exec(content);
-                if (match && match[1]) {
-                    return { version: match[1], content: content }; // Return version and content
-                }
+            ns.rm(tempFile); // Clean up temp file
+
+            // --- ADDED LOGGING START ---
+            ns.print(`DEBUG: Fetched remote content snippet: ${content.substring(0, 100)}...`);
+            const match = regex.exec(content);
+            ns.print(`DEBUG: Regex match result: ${JSON.stringify(match)}`);
+            // --- ADDED LOGGING END ---
+
+            if (match && match[1]) {
+                version = match[1];
+                // --- ADDED LOGGING ---
+                ns.print(`DEBUG: Extracted remote version: ${version}`);
+                // --- ADDED LOGGING ---
+            } else {
+                 ns.print("WARN: Could not extract version string from remote file.");
+                 ns.print(`DEBUG: Content was: ${content.substring(0, 200)}...`); // Log more content on failure
             }
         } else {
-             ns.tprint(`wget failed for remote version check from ${url}`);
+             ns.print("ERROR: wget failed to download remote daemon for version check.");
         }
     } catch (e) {
-        ns.tprint(`Error fetching/reading remote version: ${e}`);
+        ns.print(`ERROR fetching or processing remote version: ${e}`);
+        if (ns.fileExists(tempFile)) ns.rm(tempFile); // Ensure cleanup on error
     }
-    return { version: null, content: null }; // Return nulls if fetching/parsing fails
+    
+    // Return object includes content for potential future use if needed
+    return { version: version, content: content }; 
 }
 
-// Function to define fallback scripts content (DOES NOT WRITE FILES)
 function createFallbackScriptsDefinitions(ns) {
     const definitions = {};
 

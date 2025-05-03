@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "1.9.0"; // Version identifier - Fixed dependency download URL
+export const DAEMON_VERSION = "2.0.0"; // Version identifier - Added share manager
 const CONFIG_FILE = 'daemon-config.txt';
 
 export async function main(ns) {
@@ -133,6 +133,15 @@ export async function main(ns) {
         enabled: true,
         args: [],
         fallback: null
+      },
+      "share-manager.js": { // Added share manager
+        enabled: true,
+        singleton: true,
+        ramCheck: true,      // Check RAM for the manager itself
+        priority: 80,        // Low priority, runs after hacking/upgrades
+        tail: true,
+        args: []
+        // No specific SF required, but useful with many servers
       }
     }
   };
@@ -464,7 +473,9 @@ export async function main(ns) {
         "hack-worker.js",
         "grow-worker.js",
         "weaken-worker.js",
-        "backdoor-manager.js" // Added new script
+        "backdoor-manager.js",
+        "share-manager.js", // Added share manager
+        "run-share.js",      // Added share worker
         // Add other core scripts managed by the daemon here
     ];
     // Define source/repo URL (replace with your actual repo URL)

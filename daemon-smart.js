@@ -256,25 +256,14 @@ export async function main(ns) {
     // Check for source file requirements 
     if (configToUse.sourceFileRequirement && !hasSourceFile(configToUse.sourceFileRequirement)) {
       if (!config.suppressSourceFileWarnings) {
-        ns.print(`WARN: ${scriptName} needs SF ${configToUse.sourceFileRequirement}.`);
+        ns.print(`WARN: ${scriptName} requires SF ${configToUse.sourceFileRequirement}, which is missing.`);
       }
-      if (configToUse.fallback) {
-        ns.print(`-> Fallback logic activated for ${scriptName} due to missing SF.`);
-        // We don't change scriptToRun, but acknowledge fallback logic is in effect
-        isFallbackLogicActive = true;
-        // If the *fallback definition* had requirements, check them (rare)
-        const fallbackConfig = config.scriptConfig[configToUse.fallback] || {};
-        if (fallbackConfig.sourceFileRequirement && !hasSourceFile(fallbackConfig.sourceFileRequirement)) {
-           ns.print(`ERROR: Fallback logic for ${scriptName} also requires unavailable SF ${fallbackConfig.sourceFileRequirement}. Cannot run.`);
-           return { success: false, reason: `fallback SF requirement (${fallbackConfig.sourceFileRequirement})` };
-        }
-      } else {
-        ns.print(`-> No fallback available for ${scriptName}. Skipping.`);
-        return { success: false, reason: `SF requirement (${configToUse.sourceFileRequirement})` };
-      }
+      // *** If the required SF is missing, do not proceed, even with fallback ***
+      ns.print(`-> Skipping ${scriptName} due to missing required Source-File.`);
+      return { success: false, reason: `missing required SF ${configToUse.sourceFileRequirement}` };
     }
 
-    // Check for WSE requirement
+    // Check for WSE requirement (Fallback IS allowed here)
     if (configToUse.requiresWse && !ns.stock.hasWSEAccount()) {
       if (!config.suppressSourceFileWarnings) {
         ns.print(`WARN: ${scriptName} needs WSE account.`);

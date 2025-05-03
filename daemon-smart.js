@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "2.0.0"; // Version identifier - Added share manager
+export const DAEMON_VERSION = "2.1.0"; // Version identifier - Conditional sharing for target faction
 const CONFIG_FILE = 'daemon-config.txt';
 
 export async function main(ns) {

@@ -241,30 +241,32 @@ export async function main(ns) {
   
   // Start a script if it's not already running
   async function startScript(scriptName, scriptConfig) {
-    let scriptToRun = scriptName;
+    // *** Always use the primary script name for file operations and execution ***
+    const scriptToRun = scriptName; 
     let configToUse = scriptConfig;
-    let isFallback = false;
+    let isFallbackLogicActive = false; // Flag to know if fallback conditions were met
 
     // Check if the primary script should even be attempted
     if (!configToUse.enabled) {
       return { success: false, reason: "disabled" };
     }
 
-    // Check for source file requirements BEFORE attempting primary
+    // --- Pre-checks that might trigger fallback logic --- 
+
+    // Check for source file requirements 
     if (configToUse.sourceFileRequirement && !hasSourceFile(configToUse.sourceFileRequirement)) {
       if (!config.suppressSourceFileWarnings) {
         ns.print(`WARN: ${scriptName} needs SF ${configToUse.sourceFileRequirement}.`);
       }
       if (configToUse.fallback) {
-        ns.print(`-> Attempting fallback: ${configToUse.fallback}`);
-        scriptToRun = configToUse.fallback;
-        // Ensure the daemon knows about the fallback's config
-        configToUse = config.scriptConfig[scriptToRun] || {}; // Use fallback config if defined
-        isFallback = true;
-        // If the fallback *also* has requirements (unlikely but possible), check them
-        if (configToUse.sourceFileRequirement && !hasSourceFile(configToUse.sourceFileRequirement)) {
-           ns.print(`ERROR: Fallback ${scriptToRun} also needs SF ${configToUse.sourceFileRequirement}. Cannot run.`);
-           return { success: false, reason: `fallback SF requirement (${configToUse.sourceFileRequirement})` };
+        ns.print(`-> Fallback logic activated for ${scriptName} due to missing SF.`);
+        // We don't change scriptToRun, but acknowledge fallback logic is in effect
+        isFallbackLogicActive = true;
+        // If the *fallback definition* had requirements, check them (rare)
+        const fallbackConfig = config.scriptConfig[configToUse.fallback] || {};
+        if (fallbackConfig.sourceFileRequirement && !hasSourceFile(fallbackConfig.sourceFileRequirement)) {
+           ns.print(`ERROR: Fallback logic for ${scriptName} also requires unavailable SF ${fallbackConfig.sourceFileRequirement}. Cannot run.`);
+           return { success: false, reason: `fallback SF requirement (${fallbackConfig.sourceFileRequirement})` };
         }
       } else {
         ns.print(`-> No fallback available for ${scriptName}. Skipping.`);
@@ -272,19 +274,17 @@ export async function main(ns) {
       }
     }
 
-    // Check for WSE requirement BEFORE attempting primary (specifically for stockmaster)
+    // Check for WSE requirement
     if (configToUse.requiresWse && !ns.stock.hasWSEAccount()) {
       if (!config.suppressSourceFileWarnings) {
         ns.print(`WARN: ${scriptName} needs WSE account.`);
       }
        if (configToUse.fallback) {
-        ns.print(`-> Attempting fallback: ${configToUse.fallback}`);
-        scriptToRun = configToUse.fallback;
-        configToUse = config.scriptConfig[scriptToRun] || {};
-        isFallback = true;
-         // Check fallback WSE req (unlikely)
-         if (configToUse.requiresWse && !ns.stock.hasWSEAccount()) {
-            ns.print(`ERROR: Fallback ${scriptToRun} also needs WSE account. Cannot run.`);
+        ns.print(`-> Fallback logic activated for ${scriptName} due to missing WSE.`);
+        isFallbackLogicActive = true;
+         const fallbackConfig = config.scriptConfig[configToUse.fallback] || {};
+         if (fallbackConfig.requiresWse && !ns.stock.hasWSEAccount()) {
+            ns.print(`ERROR: Fallback logic for ${scriptName} also requires unavailable WSE account. Cannot run.`);
             return { success: false, reason: "fallback WSE requirement" };
          }
       } else {
@@ -293,166 +293,109 @@ export async function main(ns) {
       }
     }
     
-    // Check if the script file exists (could be primary or fallback)
+    // Check if the script file exists (using the primary name)
     if (!ns.fileExists(scriptToRun)) {
         ns.print(`ERROR: Script file not found: ${scriptToRun}`);
-        // If the *primary* failed file check and has a fallback, try the fallback file check
-        if (!isFallback && scriptConfig.fallback && ns.fileExists(scriptConfig.fallback)) {
-            ns.print(`-> Found fallback script: ${scriptConfig.fallback}. Attempting to run it.`);
-            scriptToRun = scriptConfig.fallback;
-            configToUse = config.scriptConfig[scriptToRun] || {};
-            isFallback = true;
-        } else {
-            return { success: false, reason: "file not found" };
-        }
+        // If the file doesn't exist, even fallback logic can't save it.
+        // Bootstrap should have handled creating *some* file at this path.
+        return { success: false, reason: "file not found" };
     }
 
-
-    // Check if it's a singleton and already running (check by the name we intend to run)
+    // Check if it's a singleton and already running (check by the primary name)
+    // If using fallback logic, we might allow running if the *primary* isn't running,
+    // but the actual fallback script *is*. This logic gets complex. 
+    // Simplification: If *any* process matching scriptToRun is running, skip.
     if (configToUse.singleton && isScriptRunning(scriptToRun)) {
-      // ns.print(`${scriptToRun} is already running, skipping (singleton mode)`); // Too noisy
-      return { success: true, reason: "already running" }; // Consider it success if it's running
+      return { success: true, reason: "already running" }; // Consider it success
     }
     
-    // --- Specific script checks --- (kept from original, apply to scriptToRun)
-    if (scriptToRun === "sleeve.js") { // Check remains specific to sleeve.js
+    // --- Specific script API checks (still apply based on primary name) ---
+    if (scriptToRun === "sleeve.js") { 
       try {
         const numSleeves = ns.sleeve.getNumSleeves();
         if (numSleeves <= 0) {
           if (!config.suppressSourceFileWarnings) {
             ns.print(`WARN: ${scriptToRun} requires sleeves (BN10).`);
           }
-          // Decide if fallback is appropriate here (currently no fallback defined for sleeve)
            if (configToUse.fallback) {
-               // Fallback logic if sleeve gets one
+               // Potentially activate fallback logic here if needed
+                isFallbackLogicActive = true; 
            } else {
                ns.print(`-> No fallback. Skipping ${scriptToRun}.`);
               return { success: false, reason: "no sleeves" };
            }
         }
-      } catch (e) { /* sleeves not available */ 
+      } catch (e) { 
           if (!config.suppressSourceFileWarnings) {
             ns.print(`WARN: Sleeve API not available for ${scriptToRun}.`);
           }
+          // If API isn't available, fallback doesn't help unless it avoids the API call
           return { success: false, reason: "sleeve API unavailable" };
       }
     }
     
-    if (scriptToRun === "bladeburner.js") { // Check remains specific to bladeburner.js
+    if (scriptToRun === "bladeburner.js") { 
         try {
-            ns.bladeburner.getRank(); // Check if API is available
+            ns.bladeburner.getRank(); 
         } catch (e) {
             if (!config.suppressSourceFileWarnings) {
                 ns.print(`WARN: Bladeburner API not available for ${scriptToRun}.`);
             }
-            // Decide if fallback is appropriate here
+            // Fallback unlikely to help if API is missing
             return { success: false, reason: "bladeburner API unavailable" };
         }
     }
     // --- End specific script checks ---
 
 
-    // Check RAM before executing
+    // Check RAM before executing (use primary script name for cost check)
     let requiredRam = 0;
     if (configToUse.ramCheck) {
-      requiredRam = getScriptRamCost(scriptToRun);
+      requiredRam = getScriptRamCost(scriptToRun); // Check RAM cost of the primary file
       const availableRam = getAvailableRam();
       
-      if (requiredRam === 0) {
-          ns.print(`ERROR: Could not get RAM cost for ${scriptToRun}. Skipping.`);
+      if (requiredRam === 0 && ns.fileExists(scriptToRun)) {
+          // If file exists but RAM cost is 0, it might be empty or corrupted
+          ns.print(`ERROR: Could not get RAM cost for existing file ${scriptToRun}. Skipping.`);
           return { success: false, reason: "RAM cost unavailable" };
+      } else if (requiredRam === 0) { 
+           // This case should be caught by fileExists earlier
+           ns.print(`ERROR: Cannot get RAM cost for non-existent file ${scriptToRun}. Skipping.`);
+           return { success: false, reason: "RAM cost unavailable / file missing" };
       }
 
       if (availableRam < requiredRam) {
         ns.print(`WARN: Not enough RAM for ${scriptToRun}. Need ${requiredRam.toFixed(1)}GB, have ${availableRam.toFixed(1)}GB available.`);
-        
-        // If primary fails RAM check, should we try fallback?
-        // Fallbacks usually have lower RAM costs, so yes.
-        if (!isFallback && scriptConfig.fallback) {
-             ns.print(`-> Checking fallback: ${scriptConfig.fallback}`);
-             const fallbackScript = scriptConfig.fallback;
-             const fallbackConfig = config.scriptConfig[fallbackScript] || {};
-             const fallbackRam = getScriptRamCost(fallbackScript);
-             
-             if (fallbackRam > 0 && availableRam >= fallbackRam) {
-                 ns.print(`-> Attempting to run fallback ${fallbackScript} (${fallbackRam.toFixed(1)}GB) instead.`);
-                 scriptToRun = fallbackScript;
-                 configToUse = fallbackConfig;
-                 requiredRam = fallbackRam; // Update required RAM for exec check
-                 isFallback = true;
-             } else {
-                 ns.print(`-> Fallback ${fallbackScript} also needs too much RAM (${fallbackRam.toFixed(1)}GB) or unavailable. Skipping.`);
-                 return { success: false, reason: "insufficient RAM for primary and fallback" };
-             }
-        } else {
-            // Either already fallback or no fallback defined, or fallback too expensive
-             return { success: false, reason: "insufficient RAM" };
-        }
+        // Even if fallback logic is active, if the primary script file (containing fallback code)
+        // requires too much RAM, we can't run it.
+         return { success: false, reason: "insufficient RAM" };
       }
     }
     
-    // Execute the script (either primary or fallback)
-    ns.print(`Starting ${scriptToRun}...`);
+    // Execute the primary script file
+    ns.print(`Starting ${scriptToRun}${(isFallbackLogicActive ? ' (using fallback logic)' : '')}...`);
     const pid = ns.exec(scriptToRun, "home", 1, ...(configToUse.args || []));
     
     if (pid > 0) {
       ns.print(`✓ Started ${scriptToRun} with PID ${pid}`);
       
-      // Track the process using the name it was actually run with
+      // Track the process using the primary script name
       runningProcesses.set(scriptToRun, {
         pid: pid,
         startTime: Date.now(),
-        isFallback: isFallback, // Track if it's a fallback
-        originalScript: isFallback ? scriptName : null // Track original if fallback
+        isFallbackActive: isFallbackLogicActive, // Track if fallback logic was used
+        originalScript: scriptName // Keep original name for clarity maybe?
       });
       
-      // Open tail window if configured
-      if (configToUse.tail && !ns.ui.getTailWindow(pid)) {
+      // Open tail window if configured - *** REMOVED ns.ui.getTailWindow check ***
+      if (configToUse.tail) {
          ns.tail(pid);
       }
       return { success: true, reason: "started", pid: pid, scriptRan: scriptToRun };
     } else {
-      ns.print(`✗ Failed to start ${scriptToRun} (PID=0). Possible RAM issue or script error.`);
-      // If exec failed for the *primary* script, try the fallback *now*
-       if (!isFallback && scriptConfig.fallback) {
-           ns.print(`-> Attempting fallback ${scriptConfig.fallback} due to exec failure.`);
-           const fallbackScript = scriptConfig.fallback;
-           const fallbackConfig = config.scriptConfig[fallbackScript] || {};
-           
-           // Re-check file existence and RAM for fallback before trying exec
-           if (ns.fileExists(fallbackScript)) {
-               const fallbackRam = getScriptRamCost(fallbackScript);
-               const availableRam = getAvailableRam();
-               if (fallbackRam > 0 && availableRam >= fallbackRam) {
-                   const fallbackPid = ns.exec(fallbackScript, "home", 1, ...(fallbackConfig.args || []));
-                   if (fallbackPid > 0) {
-                       ns.print(`✓ Started fallback ${fallbackScript} with PID ${fallbackPid}`);
-                       runningProcesses.set(fallbackScript, {
-                           pid: fallbackPid,
-                           startTime: Date.now(),
-                           isFallback: true,
-                           originalScript: scriptName
-                       });
-                       if (fallbackConfig.tail && !ns.ui.getTailWindow(fallbackPid)) {
-                           ns.tail(fallbackPid);
-                       }
-                       return { success: true, reason: "started fallback", pid: fallbackPid, scriptRan: fallbackScript };
-                   } else {
-                       ns.print(`✗ Failed to start fallback ${fallbackScript} (PID=0).`);
-                       return { success: false, reason: "fallback exec failed" };
-                   }
-               } else {
-                    ns.print(`-> Fallback ${fallbackScript} RAM check failed (${fallbackRam.toFixed(1)}GB needed, ${availableRam.toFixed(1)}GB available). Cannot start.`);
-                    return { success: false, reason: "fallback RAM check failed" };
-               }
-           } else {
-               ns.print(`-> Fallback script ${fallbackScript} not found. Cannot start.`);
-               return { success: false, reason: "fallback file not found" };
-           }
-       } else {
-           // Exec failed, and it was either already the fallback or no fallback exists.
-           return { success: false, reason: "exec failed" };
-       }
+      ns.print(`✗ Failed to start ${scriptToRun} (PID=0). Possible RAM issue or script error within the file.`);
+       // If exec fails, there's nothing more we can do, even with fallback logic active.
+       return { success: false, reason: "exec failed" };
     }
   }
   

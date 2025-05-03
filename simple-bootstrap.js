@@ -21,7 +21,7 @@ export async function main(ns) {
   };
   
   ns.tprint("╔════════════════════════════════════════════╗");
-  ns.tprint("║      BITBURNER BOOTSTRAP UTILITY v1.8      ║"); // Bumped bootstrap version
+  ns.tprint("║      BITBURNER BOOTSTRAP UTILITY v1.9      ║"); // Bumped bootstrap version
   ns.tprint("╠════════════════════════════════════════════╣");
   
   // Create fallback script content first (doesn't write files yet)

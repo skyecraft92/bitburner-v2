@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "2.1.0"; // Version identifier - Conditional sharing for target faction
+export const DAEMON_VERSION = "2.2.0"; // Version identifier - Conditional sharing for target faction
 const CONFIG_FILE = 'daemon-config.txt';
 
 export async function main(ns) {
@@ -145,6 +145,15 @@ export async function main(ns) {
       }
     }
   };
+  
+  // Make reservedRam dynamic based on home's total RAM
+  if (ns.getHostname() === "home") {
+    const totalHomeRam = ns.getServerMaxRam("home");
+    // Reserve 5% of home RAM, but ensure it's at least 32GB.
+    const percentageBasedReservation = Math.floor(totalHomeRam * 0.05);
+    config.reservedRam = Math.max(32, percentageBasedReservation); 
+    ns.print(`[INFO] Total home RAM: ${ns.formatRam(totalHomeRam)}. Daemon reserved RAM automatically set to: ${ns.formatRam(config.reservedRam)}.`);
+  }
   
   // Handle special command-line options
   if (options.help) {

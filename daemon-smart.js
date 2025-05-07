@@ -1,5 +1,5 @@
 /** @param {NS} ns */
-export const DAEMON_VERSION = "2.2.0"; // Version identifier - Conditional sharing for target faction
+export const DAEMON_VERSION = "2.4.0"; // Version identifier - Added network-mapper.js
 const CONFIG_FILE = 'daemon-config.txt';
 
 export async function main(ns) {
@@ -142,6 +142,14 @@ export async function main(ns) {
         tail: true,
         args: []
         // No specific SF required, but useful with many servers
+      },
+      "network-mapper.js": {
+        enabled: true,
+        singleton: true,
+        ramCheck: true,
+        priority: 90, // Low priority, background utility
+        tail: false,   // User can enable if needed via config or manually
+        args: []
       }
     }
   };
@@ -485,6 +493,7 @@ export async function main(ns) {
         "backdoor-manager.js",
         "share-manager.js", // Added share manager
         "run-share.js",      // Added share worker
+        "network-mapper.js", // Added network mapper script
         // Add other core scripts managed by the daemon here
     ];
     // Define source/repo URL (replace with your actual repo URL)

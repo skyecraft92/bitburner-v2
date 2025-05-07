@@ -27,7 +27,11 @@ export async function main(ns) {
                 const analysisData = ns.scanAnalyze(server);
                 
                 analysisFileContent += `Server: ${server}\n`;
-                analysisFileContent += `  Path: ${analysisData.path.join(' -> ')}\n`;
+                if (analysisData && Array.isArray(analysisData.path)) {
+                    analysisFileContent += `  Path: ${analysisData.path.join(' -> ')}\n`;
+                } else {
+                    analysisFileContent += `  Path: N/A or Invalid Path Data\n`;
+                }
                 analysisFileContent += `  Security: ${analysisData.security.toFixed(2)} / ${analysisData.minSecurity.toFixed(2)} (Min: ${analysisData.minSecurity.toFixed(2)})\n`;
                 analysisFileContent += `  Money: $${ns.formatNumber(analysisData.money)} / $${ns.formatNumber(analysisData.maxMoney)} (Max: $${ns.formatNumber(analysisData.maxMoney)})\n`;
                 analysisFileContent += `  Required Hacking: ${analysisData.reqHack}\n`;
@@ -41,21 +45,26 @@ export async function main(ns) {
                 analysisFileContent += `---\n`;
 
                 if (server !== "home") {
-                    const pathArray = analysisData.path;
                     let connectCmd = "";
-                    if (pathArray && pathArray.length > 0) {
-                        connectCmd = pathArray.map(p => `connect ${p}`).join('; ');
-                    } else if (pathArray && pathArray.length === 0 && server !== "home"){
-                        connectCmd = `connect ${server}`;
+                    if (analysisData && Array.isArray(analysisData.path)) {
+                        const pathArray = analysisData.path;
+                        if (pathArray.length > 0) {
+                            connectCmd = pathArray.map(p => `connect ${p}`).join('; ');
+                        } else {
+                            connectCmd = `connect ${server}`;
+                        }
+                        connectMapFileContent += `${server}: ${connectCmd}\n`;
+                    } else {
+                        ns.print(`[WARN] Path data for ${server} is invalid or missing. analysisData.path: ${JSON.stringify(analysisData ? analysisData.path : 'analysisData_is_null')}`);
+                        connectMapFileContent += `${server}: Error processing path data.\n`;
                     }
-                    connectMapFileContent += `${server}: ${connectCmd}\n`;
                 }
 
             } catch (e) {
-                ns.print(`[WARN] Could not run scanAnalyze for ${server}: ${e.message}. Skipping.`);
-                analysisFileContent += `Server: ${server}\n  Error: ${e.message}\n---\n`;
+                ns.print(`[WARN] Error during scanAnalyze or processing for ${server}: ${e.message}. Skipping.`);
+                analysisFileContent += `Server: ${server}\n  Error during processing: ${e.message}\n---\n`;
                 if (server !== "home") {
-                    connectMapFileContent += `${server}: Error generating connect path.\n`;
+                    connectMapFileContent += `${server}: Error generating connect path (exception).\n`;
                 }
             }
             await ns.sleep(25); 
